@@ -10,3 +10,8 @@ You can click the Preview link to take a look at your changes.
 --->
 一个有时颓废有时奋进的社畜，
 希望在代码中寻找到一些乐趣。
+
+
+pnpm install
+
+npm run dev
