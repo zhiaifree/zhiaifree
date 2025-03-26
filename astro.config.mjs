@@ -12,7 +12,8 @@ import svelte from "@astrojs/svelte";
 
 // https://astro.build/config
 export default defineConfig({
-  site: "https://zhiaifree.com/",
+  site: "https://zhiaifree.github.io/",
+  base: '/zhiaifree/',
   integrations: [
     sitemap(),
     robotsTxt({
