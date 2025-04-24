@@ -37,7 +37,7 @@ jobs:
 
       - name: Debug Secrets
         run: |
-          echo "Host: ${{ secrets.SSH_HOST != '' && 'SET' || 'NOT_SET' }}"
+          echo "Host: ${{ secrets.REMOTE_HOST != '' && 'SET' || 'NOT_SET' }}"
 
       # 6. 部署到腾讯云
       - name: copy dist file with scp
