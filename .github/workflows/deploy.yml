@@ -1,43 +1,53 @@
-# name: Deploy Astro with pnpm
+name: Deploy Astro with pnpm
 
-# on:
-#   push:
-#     branches: [main]  # 触发分支
-#   pull_request:
-#     branches: [main]
+on:
+  push:
+    branches: [main]  # 触发分支
+  pull_request:
+    branches: [main]
 
-# jobs:
-#   deploy:
-#     runs-on: ubuntu-latest
-#     steps:
-#       # 1. 检出代码
-#       - name: Checkout
-#         uses: actions/checkout@v4
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    steps:
+      # 1. 检出代码
+      - name: Checkout
+        uses: actions/checkout@v4
 
-#       # 2. 安装 pnpm
-#       - name: Setup pnpm
-#         uses: pnpm/action-setup@v2
-#         with:
-#           version: "9.0"  # 指定 pnpm 版本
+      # 2. 安装 pnpm
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v2
+        with:
+          version: "9.0"  # 指定 pnpm 版本
 
-#       # 3. 安装 Node.js
-#       - name: Setup Node.js
-#         uses: actions/setup-node@v4
-#         with:
-#           node-version: "20"  # 指定 Node 版本
-#           cache: "pnpm"       # 启用 pnpm 缓存
+      # 3. 安装 Node.js
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"  # 指定 Node 版本
+          cache: "pnpm"       # 启用 pnpm 缓存
 
-#       # 4. 安装依赖（使用 pnpm）
-#       - name: Install dependencies
-#         run: pnpm install --frozen-lockfile  # 严格依赖 pnpm-lock.yaml
+      # 4. 安装依赖（使用 pnpm）
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile  # 严格依赖 pnpm-lock.yaml
 
-#       # 5. 构建 Astro 项目
-#       - name: Build
-#         run: pnpm run build  # 执行 astro build
+      # 5. 构建 Astro 项目
+      - name: Build
+        run: pnpm run build  # 执行 astro build
 
-#       # 6. 部署到 GitHub Pages
-#       - name: Deploy
-#         uses: peaceiris/actions-gh-pages@v3
-#         with:
-#           github_token: ${{ secrets.GITHUB_TOKEN }}
-#           publish_dir: ./dist  # Astro 默认输出目录
+      # 6. 部署到腾讯云
+      - name: copy dist file with scp
+        uses: appleboy/scp-action@v0.0.1
+        with:
+          host: ${{ secrets.REMOTE_HOST }}
+          port: 22
+          username: ${{ secrets.REMOTE_USER }}
+          password: ${{ secrets.REMOTE_PASS }}
+          source: "astro/"
+
+      # # 6. 部署到 GitHub Pages
+      # - name: Deploy
+      #   uses: peaceiris/actions-gh-pages@v3
+      #   with:
+      #     github_token: ${{ secrets.GITHUB_TOKEN }}
+      #     publish_dir: ./dist  # Astro 默认输出目录
