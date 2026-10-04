@@ -2,6 +2,14 @@
   "name": "astro-bento-portfolio",
   "type": "module",
   "version": "0.0.2",
+  "packageManager": "pnpm@10.34.6",
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "@parcel/watcher",
+      "esbuild",
+      "sharp"
+    ]
+  },
   "scripts": {
     "dev": "astro dev",
     "start": "astro dev",
