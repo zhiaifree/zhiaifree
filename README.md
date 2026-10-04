@@ -12,6 +12,6 @@ You can click the Preview link to take a look at your changes.
 希望在代码中寻找到一些乐趣。
 
 
-pnpm install
+npm install
 
 npm run dev

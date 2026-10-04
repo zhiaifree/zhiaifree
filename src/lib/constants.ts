@@ -1,9 +1,7 @@
 export const LINKS = {
   github: "https://github.com/zhiaifree",
-  // linkedin: "https://www.linkedin.com/in/gianmarco-cavallo/",
-  medium: "https://ladvace.medium.com/",
   discord: "https://discordapp.com/users/163300027618295808",
-  dribble: "https://dribbble.com/Ladvace_Jace",
+  bilibili: "https://space.bilibili.com/133469375",
   email: "zhenkai.yang@qq.com",
 };
 

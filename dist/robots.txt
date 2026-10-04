@@ -1,0 +1,4 @@
+User-agent: *
+Allow: /
+Sitemap: https://zhiaifree/sitemap-index.xml
+Sitemap: https://zhiaifree/sitemap-0.xml
