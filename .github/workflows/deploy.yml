@@ -41,6 +41,7 @@ jobs:
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT }}
           script_stop: true
+          command_timeout: 30m
           script: |
             docker pull ghcr.io/${{ github.repository }}:latest
             docker stop astro-blog || true
