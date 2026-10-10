@@ -32,9 +32,36 @@ jobs:
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
     steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Prepare deploy directory on server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: mkdir -p ~/blog
+
+      - name: Upload compose config to server
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          source: "docker-compose.yml,Caddyfile"
+          target: "~/blog"
+
       - name: Deploy to server via SSH
         uses: appleboy/ssh-action@v1
+        env:
+          DOMAIN: ${{ secrets.DOMAIN }}
+          WEB_IMAGE: ghcr.io/${{ github.repository }}:latest
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
@@ -42,13 +69,15 @@ jobs:
           port: ${{ secrets.SSH_PORT }}
           script_stop: true
           command_timeout: 30m
+          envs: DOMAIN,WEB_IMAGE
           script: |
-            docker pull ghcr.io/${{ github.repository }}:latest
-            docker stop astro-blog || true
-            docker rm astro-blog || true
-            docker run -d \
-              --name astro-blog \
-              --restart unless-stopped \
-              -p 80:80 \
-              ghcr.io/${{ github.repository }}:latest
+            docker compose version >/dev/null 2>&1 || { echo "错误：服务器未安装 Docker Compose 插件，请先安装（apt install docker-compose-plugin 或升级 Docker）"; exit 1; }
+            [ -n "$DOMAIN" ] || { echo "错误：GitHub Secrets 中未设置 DOMAIN，请到仓库 Settings → Secrets and variables → Actions 添加 DOMAIN=你的域名"; exit 1; }
+            # 旧的裸 nginx 容器占用 80 端口，先移除（不存在则忽略）
+            docker rm -f astro-blog 2>/dev/null || true
+            cd ~/blog
+            [ -f docker-compose.yml ] || { echo "错误：~/blog 中缺少 docker-compose.yml，compose 配置上传失败"; exit 1; }
+            echo "DOMAIN=$DOMAIN" > .env
+            docker compose pull web
+            docker compose up -d --remove-orphans
             docker image prune -f

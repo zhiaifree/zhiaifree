@@ -1,0 +1,17 @@
+# 域名从环境变量读取（docker-compose 会传入 DOMAIN）
+# Caddy 会自动为该域名申请 Let's Encrypt 证书，到期前自动续期
+{$DOMAIN} {
+	# 反向代理到 docker-compose 里的 nginx 容器（web 服务）
+	reverse_proxy web:80
+
+	# 压缩响应，减小传输体积
+	encode zstd gzip
+
+	# 基础安全响应头
+	header {
+		Strict-Transport-Security "max-age=31536000; includeSubDomains"
+		X-Content-Type-Options "nosniff"
+		Referrer-Policy "strict-origin-when-cross-origin"
+		-Server
+	}
+}

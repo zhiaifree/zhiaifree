@@ -1,0 +1,30 @@
+services:
+  # Astro 静态站点（现有 Dockerfile 构建的 nginx 容器）
+  web:
+    # 云服务器部署：GitHub Actions 构建好镜像后，WEB_IMAGE 变量指定 GHCR 镜像，
+    # 用 docker compose pull 拉取即可；本地开发不设 WEB_IMAGE，用 build 构建
+    image: ${WEB_IMAGE:-zhiaifree-web:local}
+    build: .
+    restart: unless-stopped
+
+  # Caddy 反向代理：负责 HTTPS 证书的自动申请与续期
+  caddy:
+    image: caddy:2-alpine
+    restart: unless-stopped
+    ports:
+      - "80:80"       # HTTP（用于证书验证 + 自动跳转 HTTPS）
+      - "443:443"     # HTTPS
+      - "443:443/udp" # HTTP/3
+    environment:
+      # 未设置 DOMAIN 时直接报错提示，避免 Caddy 启动失败
+      - DOMAIN=${DOMAIN:?请先在 .env 文件中设置 DOMAIN=你的域名（参考 .env.example）}
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data     # 证书持久化，重启不会重复申请（避免触发 Let's Encrypt 限流）
+      - caddy_config:/config
+    depends_on:
+      - web
+
+volumes:
+  caddy_data:
+  caddy_config:
