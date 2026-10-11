@@ -21,10 +21,12 @@ GitHub push
 | 文件 | 作用 |
 |------|------|
 | `Dockerfile` | 构建 Astro 静态站点镜像（nginx），未改动 |
-| `docker-compose.yml` | 编排 web（站点）+ caddy（HTTPS 网关）；服务器通过 `WEB_IMAGE` 变量使用 GHCR 预构建镜像 |
+| `docker-compose.yml` | 编排 web（站点）+ caddy（HTTPS 网关）；服务器通过 `WEB_IMAGE` / `CADDY_IMAGE` 变量使用 GHCR 预构建镜像 |
 | `Caddyfile` | Caddy 配置（域名、反向代理、压缩、安全头） |
-| `.github/workflows/deploy.yml` | push 到 main 自动构建镜像并部署到服务器（含 compose 配置同步） |
+| `.github/workflows/deploy.yml` | push 到 main 自动构建镜像并部署到服务器（含 compose 配置同步、部署后健康检查） |
 | `.env.example` | 域名配置模板 |
+
+> **为什么 Caddy 镜像要走 GHCR 转存**：国内云服务器直连 Docker Hub 拉取镜像经常超时/极慢（曾导致一次部署假成功——容器没起来但 CI 显示绿色）。因此 CI 每次构建时会把 `caddy:2-alpine` 转存为 `ghcr.io/<仓库>:caddy-2-alpine`，服务器全部镜像统一从 GHCR 拉取。部署脚本使用显式错误检查和健康检查（Caddy 必须在 80 端口响应，否则 CI 直接报红并输出容器日志）。
 
 > 注意：`.env` 在 `.gitignore` 中不会被推送。**服务器上的 `.env` 由部署脚本每次自动生成**（域名来自 GitHub Secrets 中的 `DOMAIN`），本地 `.env` 只用于本地测试。
 
@@ -88,7 +90,8 @@ cd ~/blog && docker compose logs -f caddy
 cd ~/blog
 echo "DOMAIN=你的域名" > .env
 export WEB_IMAGE=ghcr.io/zhiaifree/zhiaifree:latest
-docker compose pull web
+export CADDY_IMAGE=ghcr.io/zhiaifree/zhiaifree:caddy-2-alpine
+docker compose pull
 docker compose up -d --remove-orphans
 ```
 
@@ -99,7 +102,8 @@ docker compose logs -f caddy   # 查看 Caddy 日志（证书申请/续期都会
 docker compose ps              # 查看服务状态
 docker compose down            # 停止（数据卷保留）
 export WEB_IMAGE=ghcr.io/zhiaifree/zhiaifree:latest
-docker compose pull web && docker compose up -d   # 手动更新站点
+export CADDY_IMAGE=ghcr.io/zhiaifree/zhiaifree:caddy-2-alpine
+docker compose pull && docker compose up -d   # 手动更新站点
 
 # 更换域名：改 GitHub Secrets 里的 DOMAIN 后重新部署，
 # 或直接改服务器上的 .env 后执行 docker compose up -d caddy

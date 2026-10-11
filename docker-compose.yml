@@ -9,7 +9,9 @@ services:
 
   # Caddy 反向代理：负责 HTTPS 证书的自动申请与续期
   caddy:
-    image: caddy:2-alpine
+    # 服务器部署用 CI 转存到 GHCR 的镜像（国内服务器直连 Docker Hub 不稳定）；
+    # 本地开发默认从 Docker Hub 拉取
+    image: ${CADDY_IMAGE:-caddy:2-alpine}
     restart: unless-stopped
     ports:
       - "80:80"       # HTTP（用于证书验证 + 自动跳转 HTTPS）

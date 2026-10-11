@@ -29,6 +29,13 @@ jobs:
           push: true
           tags: ghcr.io/${{ github.repository }}:latest
 
+      # 国内服务器直连 Docker Hub 拉取不稳定，转存一份 Caddy 镜像到 GHCR
+      - name: Mirror Caddy image to GHCR
+        run: |
+          docker pull caddy:2-alpine
+          docker tag caddy:2-alpine ghcr.io/${{ github.repository }}:caddy-2-alpine
+          docker push ghcr.io/${{ github.repository }}:caddy-2-alpine
+
   deploy:
     needs: build-and-push
     runs-on: ubuntu-latest
@@ -62,14 +69,14 @@ jobs:
         env:
           DOMAIN: ${{ secrets.DOMAIN }}
           WEB_IMAGE: ghcr.io/${{ github.repository }}:latest
+          CADDY_IMAGE: ghcr.io/${{ github.repository }}:caddy-2-alpine
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT }}
-          script_stop: true
           command_timeout: 30m
-          envs: DOMAIN,WEB_IMAGE
+          envs: DOMAIN,WEB_IMAGE,CADDY_IMAGE
           script: |
             docker compose version >/dev/null 2>&1 || { echo "错误：服务器未安装 Docker Compose 插件，请先安装（apt install docker-compose-plugin 或升级 Docker）"; exit 1; }
             [ -n "$DOMAIN" ] || { echo "错误：GitHub Secrets 中未设置 DOMAIN，请到仓库 Settings → Secrets and variables → Actions 添加 DOMAIN=你的域名"; exit 1; }
@@ -78,6 +85,17 @@ jobs:
             cd ~/blog
             [ -f docker-compose.yml ] || { echo "错误：~/blog 中缺少 docker-compose.yml，compose 配置上传失败"; exit 1; }
             echo "DOMAIN=$DOMAIN" > .env
-            docker compose pull web
-            docker compose up -d --remove-orphans
+            docker compose pull || { echo "错误：镜像拉取失败，请检查 GHCR 镜像是否可见/服务器网络"; exit 1; }
+            docker compose up -d --remove-orphans || { echo "错误：容器启动失败"; exit 1; }
+            sleep 5
+            docker compose ps
+            # 健康检查：Caddy 必须在 80 端口响应（带 Host 头命中站点，正常应返回 308 跳转 HTTPS）
+            CODE=$(curl -s --max-time 8 -H "Host: $DOMAIN" -o /dev/null -w "%{http_code}" http://127.0.0.1)
+            if [ "$CODE" = "000" ]; then
+              echo "错误：Caddy 未在 80 端口响应，Caddy 最近日志："
+              docker compose logs --tail 40 caddy
+              exit 1
+            fi
+            echo "健康检查通过：Caddy 已响应（HTTP $CODE）"
+            docker compose logs --tail 15 caddy
             docker image prune -f
