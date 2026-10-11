@@ -16,14 +16,14 @@
 	}
 }
 
-# ===== Node.js 项目（同一域名，不同端口对外提供 HTTPS）=====
-# 证书按域名签发、与端口无关，以下端口复用同一张自动续期的证书
-# 注意：nodeapp1/nodeapp2 是约定的容器名，实际名称不同请改这里后推送
-# Node 容器需加入 shared-apps 网络，且不要映射端口到宿主机（80/443/3000/3001 由 Caddy 独占）
+# ===== Node.js 项目（宿主机 node 进程，同一域名不同端口对外 HTTPS）=====
+# 对外 3000/3001 由 Caddy 提供 TLS；Node 进程监听宿主机 13000/13001（需绑 0.0.0.0，
+# 不能监听 3000/3001——已被 Caddy 占用），Caddy 通过 host.docker.internal 转发
+# 证书按域名签发、与端口无关，全部端口复用同一张自动续期的证书
 {$DOMAIN}:3000 {
-	reverse_proxy nodeapp1:3000
+	reverse_proxy host.docker.internal:13000
 }
 
 {$DOMAIN}:3001 {
-	reverse_proxy nodeapp2:3001
+	reverse_proxy host.docker.internal:13001
 }

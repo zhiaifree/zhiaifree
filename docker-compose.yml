@@ -19,9 +19,12 @@ services:
       - "443:443/udp" # HTTP/3
       - "3000:3000"   # Node 项目 1（HTTPS）
       - "3001:3001"   # Node 项目 2（HTTPS）
+    extra_hosts:
+      # 让 Caddy 容器能访问宿主机上直接运行的 Node 进程（host-gateway 解析为宿主机网桥 IP）
+      - "host.docker.internal:host-gateway"
     networks:
       - default      # 与 web（博客）通信
-      - shared-apps  # 与其他项目容器通信（external，需先 docker network create shared-apps）
+      - shared-apps  # 预留：以后若有容器化项目可加入此网络互通
     environment:
       # 未设置 DOMAIN 时直接报错提示，避免 Caddy 启动失败
       - DOMAIN=${DOMAIN:?请先在 .env 文件中设置 DOMAIN=你的域名（参考 .env.example）}

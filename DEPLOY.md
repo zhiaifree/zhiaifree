@@ -82,27 +82,36 @@ cd ~/blog && docker compose logs -f caddy
 Caddy 是全服务器唯一监听 80/443/3000/3001 的进程，所有项目共用它做 HTTPS。证书按域名签发、与端口无关，全部端口复用同一张自动续期的证书：
 
 - `https://zhiaifree.cn` → 博客（web 容器）
-- `https://zhiaifree.cn:3000` → Node 项目 1（约定容器名 `nodeapp1`，内部监听 3000）
-- `https://zhiaifree.cn:3001` → Node 项目 2（约定容器名 `nodeapp2`，内部监听 3001）
+- `https://zhiaifree.cn:3000` → Node 项目 1（宿主机进程，内部监听 13000）
+- `https://zhiaifree.cn:3001` → Node 项目 2（宿主机进程，内部监听 13001）
+
+当前方案：Node 项目用**服务器的 Node 环境直接运行**（pm2/systemd/node 均可），不跑容器。Caddy 容器通过 `host.docker.internal`（compose 里已配 `host-gateway`）访问宿主机进程。
 
 ### 接入步骤（以项目 1 为例）
 
-1. 云服务器安全组放行 **3000/TCP**（项目 2 放行 3001/TCP）
-2. 项目以 Docker 容器运行，**加入 shared-apps 网络、不映射宿主机端口**：
+1. **监听端口必须是 13000**（项目 2 用 13001），且绑定 `0.0.0.0`：
 
-```bash
-docker run -d --name nodeapp1 --restart unless-stopped --network shared-apps 你的node镜像
-```
+   ```js
+   app.listen(13000, "0.0.0.0");  // Express 示例
+   ```
 
-3. 容器内部实际监听端口需与 `Caddyfile` 中 `reverse_proxy nodeapp1:3000` 一致；不一致就改仓库里的 Caddyfile 后推送，自动部署生效。
+   - **不能监听 3000/3001**：这两个端口已被 Caddy 占用，会 `EADDRINUSE` 启动失败
+   - **不能只绑 127.0.0.1**：Caddy 容器经网桥访问宿主机，绑 127.0.0.1 会 502
+   - 13000/13001 不在安全组放行之列，外部无法直连，只能走 Caddy 的 HTTPS，所以绑 0.0.0.0 是安全的
+2. 启动进程（推荐 pm2，崩溃自动重启 + 开机自启）：
+
+   ```bash
+   pm2 start app.js --name project1   # 内部监听 13000
+   pm2 save && pm2 startup            # 持久化 + 开机自启
+   ```
+3. 云服务器安全组：3000/TCP、3001/TCP 已放行，无需其他操作。
 
 ### 注意事项
 
-- **不要**让任何容器或进程监听/映射宿主机的 80/443/3000/3001（会与 Caddy 端口冲突导致启动失败）
-- Node 容器不加 `-p` 端口映射：外部只能通过 Caddy 的 HTTPS 访问，无法绕过 TLS 直连
-- 项目未启动时，对应端口访问会返回 502，属正常现象
-- `shared-apps` 网络已在服务器创建（`docker network create shared-apps`），仅重建服务器时需要重新执行
-- 跨项目容器互联依赖 `shared-apps` 外部网络；如果新项目想用宿主机进程（pm2/systemd）而非 Docker 运行，Caddy 需要改用 `host.docker.internal` 方式反代，届时再调整
+- **不要**让任何进程/容器监听宿主机的 80/443/3000/3001（会与 Caddy 冲突导致启动失败）
+- 项目未启动时，对应端口访问返回 502，属正常现象
+- 若以后某项目改为 Docker 容器运行：容器加入 `shared-apps` 网络（已创建），并把 Caddyfile 对应行改成 `reverse_proxy 容器名:端口` 后推送
+- Node 进程代码无需任何 HTTPS/证书逻辑，保持纯 HTTP
 
 ## 证书自动续期说明
 
