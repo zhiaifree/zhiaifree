@@ -6,7 +6,10 @@
 GitHub push
    └─> GitHub Actions：构建镜像 → 推送到 GHCR → SSH 到服务器
          └─> 服务器：docker compose 拉起新镜像 + Caddy
-用户 --HTTPS(443)--> Caddy --HTTP(80)--> nginx（Astro 静态站点）
+用户 ──HTTPS──> Caddy（80/443/3000/3001，全服务器唯一入口）
+                 ├─ zhiaifree.cn        → nginx（Astro 静态站点）
+                 ├─ zhiaifree.cn:3000   → Node 项目 1（容器名 nodeapp1）
+                 └─ zhiaifree.cn:3001   → Node 项目 2（容器名 nodeapp2）
 ```
 
 在原有 nginx 容器前面加了一个 **Caddy** 反向代理容器，由它负责 HTTPS：
@@ -73,6 +76,33 @@ cd ~/blog && docker compose logs -f caddy
 之后浏览器访问 `https://你的域名`，HTTP 自动 301 跳转 HTTPS。
 
 > 部署失败时先看 GitHub Actions 的日志，脚本里的报错信息会指明缺什么（如未设置 DOMAIN Secret、服务器未装 compose 插件等）。
+
+## 多项目共用 HTTPS 网关（Node.js 等新项目接入）
+
+Caddy 是全服务器唯一监听 80/443/3000/3001 的进程，所有项目共用它做 HTTPS。证书按域名签发、与端口无关，全部端口复用同一张自动续期的证书：
+
+- `https://zhiaifree.cn` → 博客（web 容器）
+- `https://zhiaifree.cn:3000` → Node 项目 1（约定容器名 `nodeapp1`，内部监听 3000）
+- `https://zhiaifree.cn:3001` → Node 项目 2（约定容器名 `nodeapp2`，内部监听 3001）
+
+### 接入步骤（以项目 1 为例）
+
+1. 云服务器安全组放行 **3000/TCP**（项目 2 放行 3001/TCP）
+2. 项目以 Docker 容器运行，**加入 shared-apps 网络、不映射宿主机端口**：
+
+```bash
+docker run -d --name nodeapp1 --restart unless-stopped --network shared-apps 你的node镜像
+```
+
+3. 容器内部实际监听端口需与 `Caddyfile` 中 `reverse_proxy nodeapp1:3000` 一致；不一致就改仓库里的 Caddyfile 后推送，自动部署生效。
+
+### 注意事项
+
+- **不要**让任何容器或进程监听/映射宿主机的 80/443/3000/3001（会与 Caddy 端口冲突导致启动失败）
+- Node 容器不加 `-p` 端口映射：外部只能通过 Caddy 的 HTTPS 访问，无法绕过 TLS 直连
+- 项目未启动时，对应端口访问会返回 502，属正常现象
+- `shared-apps` 网络已在服务器创建（`docker network create shared-apps`），仅重建服务器时需要重新执行
+- 跨项目容器互联依赖 `shared-apps` 外部网络；如果新项目想用宿主机进程（pm2/systemd）而非 Docker 运行，Caddy 需要改用 `host.docker.internal` 方式反代，届时再调整
 
 ## 证书自动续期说明
 
