@@ -1,5 +1,6 @@
 ---
 import { LINKS } from "../lib/constants";
+import ICPInfo from "../components/ICPInfo.astro";
 
 interface Props {
   title: string;
@@ -114,6 +115,7 @@ const schema =
   >
     <slot name="loader" />
     <slot />
+    <ICPInfo />
   </body>
 </html>
 

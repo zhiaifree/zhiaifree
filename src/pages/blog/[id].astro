@@ -78,12 +78,13 @@ console.log('headings', entry, id)
     margin: 0 0 10px 0;
   }
 
-  a {
+  /* 只作用于正文里的链接，不要影响页面上的其它链接（如底部备案信息） */
+  article a {
     color: #1a0dab;
     text-decoration: none;
   }
 
-  a:hover {
+  article a:hover {
     text-decoration: underline;
   }
 

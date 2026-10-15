@@ -1,0 +1,36 @@
+---
+import { SITE } from "../lib/constants";
+
+/** 备案链接统一用这个类：显式指定颜色，避免被页面里的全局 a{} 样式覆盖 */
+const linkClass =
+  "inline-flex items-center gap-1 text-neutral-400 underline-offset-4 transition-colors hover:text-neutral-100 hover:underline";
+---
+
+<footer
+  class="fixed bottom-0 left-0 right-0 z-20 flex flex-wrap items-center justify-center gap-x-3 gap-y-1 bg-darkslate-700/80 px-4 py-2 text-xs text-neutral-400"
+>
+  {
+    SITE.icp.show && (
+      <a
+        href={SITE.icp.link}
+        target="_blank"
+        rel="noreferrer"
+        class={linkClass}>
+        {SITE.icp.text}
+      </a>
+    )
+  }
+
+  {
+    SITE.police.show && (
+      <a
+        href={SITE.police.link}
+        target="_blank"
+        rel="noreferrer"
+        class={linkClass}>
+        <img src={SITE.police.icon} alt="公安备案图标" class="h-4 w-4" />
+        {SITE.police.text}
+      </a>
+    )
+  }
+</footer>
