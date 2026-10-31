@@ -3,6 +3,10 @@ name: Build, Push and Deploy
 on:
   push:
     branches: [ "main" ]
+  # 每天定时重建一次，让首页「今日油价」卡片保持最新
+  # 不想要每天自动部署的话，删掉下面这段 schedule 即可
+  schedule:
+    - cron: "17 3 * * *"
 
 jobs:
   build-and-push:
@@ -14,6 +18,20 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      # 以站点上正在用的那份数据为基准，避免重复消耗上游额度
+      - name: Use live data as baseline
+        run: |
+          curl -sS --max-time 15 "https://${{ secrets.DOMAIN }}/oil-price.json" -o oil-price-current.json || true
+          if [ -f oil-price-current.json ] && node -e "JSON.parse(require('fs').readFileSync('oil-price-current.json','utf8'))" 2>/dev/null; then
+            cp oil-price-current.json public/oil-price.json
+          fi
+
+      # 抓一次今日油价写进 public/oil-price.json（接口不可用时保留仓库里的旧数据）
+      - name: Fetch oil price
+        env:
+          APIZERO_KEY: ${{ secrets.APIZERO_KEY }}
+        run: node scripts/fetch-oil-price.mjs
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3

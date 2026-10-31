@@ -3,13 +3,18 @@ import * as d3 from "d3";
 import worldData from "../lib/world.json";
 import chinaData from "../lib/china.json";
 
-const GlobeComponent = () => {
+interface GlobeProps {
+  /** 地球缩放倍数，1 = 默认大小 */
+  scale?: number;
+}
+
+const GlobeComponent = (props: GlobeProps) => {
   let mapContainer: HTMLDivElement | undefined;
 
   // 去过的国家（以后去过国外再加进来，比如 "France"）
   const visitedCountries: string[] = [];
   // 去过的省份，写简称即可（"省/市/自治区/特别行政区"后缀会自动忽略）
-  const visitedProvinces = ["江苏", "河北", "陕西", "青海", "上海", "西藏", "重庆", "湖北", "湖南"];
+  const visitedProvinces = ["江苏", "浙江", "河北", "陕西", "青海", "上海", "西藏", "重庆", "湖北", "湖南", "辽宁"];
 
   const normalizeName = (name: string) =>
     name.replace(/(省|市|自治区|特别行政区)$/, "");
@@ -20,10 +25,11 @@ const GlobeComponent = () => {
     const width = mapContainer.clientWidth;
     const height = 500;
     const sensitivity = 75;
+    const baseScale = 250;
 
     let projection = d3
       .geoOrthographic()
-      .scale(250)
+      .scale(baseScale * (props.scale ?? 1))
       .center([0, 0])
       .rotate([-100, -35])
       .translate([width / 2, height / 2]);

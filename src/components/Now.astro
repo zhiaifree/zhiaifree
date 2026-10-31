@@ -1,17 +1,189 @@
 ---
+import { existsSync, readFileSync } from 'node:fs'
+import { resolve } from 'node:path'
 import Card from './Card/index.astro'
 import Pulse from './Pulse.astro'
+import { OIL_PRICE } from '../lib/constants'
+import {
+  normalizeOilData,
+  formatChange,
+  formatPrice,
+  formatAdjustDate,
+  formatCountdown,
+  changeClass,
+  OIL_GRADES,
+  type RawOilFile,
+} from '../lib/oilPrice'
+
+// 构建期读取 public/oil-price.json（由 scripts/fetch-oil-price.mjs 抓取）
+const oilFilePaths = [
+  resolve(process.cwd(), 'public/oil-price.json'),
+  resolve(process.cwd(), '../public/oil-price.json'),
+]
+let raw: RawOilFile | null = null
+for (const path of oilFilePaths) {
+  try {
+    if (existsSync(path)) {
+      raw = JSON.parse(readFileSync(path, 'utf8')) as RawOilFile
+      break
+    }
+  } catch {
+    /* 文件损坏就当没有数据 */
+  }
+}
+
+const snapshot = normalizeOilData(raw, OIL_PRICE.province)
+
+const rows = OIL_GRADES.map((grade) => {
+  const item = snapshot?.grades.find((g) => g.grade === grade)
+  return {
+    grade,
+    price: formatPrice(item?.price),
+    change: formatChange(item?.change),
+    expected: formatPrice(item?.expected),
+    changeClass: changeClass(item?.change),
+  }
+})
+
+const subtitle = snapshot
+  ? `${snapshot.province} · ${snapshot.updateDate.slice(5)} 更新`
+  : `${OIL_PRICE.province} · 数据待更新`
+
+const footer = snapshot
+  ? snapshot.nextAdjustDate
+    ? `下次调价 ${formatAdjustDate(snapshot.nextAdjustDate)}24时（${formatCountdown(
+        snapshot.daysRemaining,
+      )}）· 仅供参考`
+    : '调价时间待公布 · 仅供参考'
+  : '油价数据待更新'
 ---
 
 <Card colSpan="md:col-span-1" rowSpan="md:row-span-2">
   <div class="flex justify-between w-full items-start mb-2">
     <div class="flex flex-col">
-      <h2>Now</h2>
-      <a href="https://sive.rs/nowff" target="_blank">
-        <span class="text-xs text-gray-500 cursor-pointer">what's that ?</span>
+      <h2 class="text-xl font-bold leading-tight m-0 z-20">今日油价</h2>
+      <a href="https://www.icauto.com.cn/oil/" target="_blank" rel="noreferrer">
+        <span
+          class="text-[10px] leading-4 text-gray-500 cursor-pointer"
+          id="oil-subtitle">{subtitle}</span
+        >
       </a>
     </div>
     <Pulse />
   </div>
-  <p class="text-xs">Becoming a father</p>
+
+  <ul
+    class="grid grid-cols-[auto_auto_auto_auto] justify-start gap-x-2 gap-y-1 w-full list-none p-0 m-0 text-xs"
+    id="oil-list"
+    data-oil-fetched-at={snapshot?.fetchedAt ?? 0}
+  >
+    {
+      rows.map((row) => (
+        // subgrid：这一行直接复用父级 grid 的列宽，三行才能竖着对齐
+        <li class="grid grid-cols-subgrid col-span-4 items-baseline">
+          <span class="text-neutral-300 mr-1.5">{row.grade}#</span>
+          <span class="font-semibold tabular-nums" data-oil-price={row.grade}>
+            {row.price}
+          </span>
+          <span
+            class={`text-xs ${row.changeClass} tabular-nums`}
+            data-oil-change={row.grade}
+            title="预计调整幅度（元/升）"
+          >
+            {row.change}
+          </span>
+          <span
+            class="text-xs text-neutral-400 tabular-nums ml-3"
+            data-oil-expected={row.grade}
+            title="预计调价后价格（元/升）"
+          >
+            → {row.expected}
+          </span>
+        </li>
+      ))
+    }
+  </ul>
+
+  <p class="text-[10px] leading-3 text-gray-500 mt-2 m-0" id="oil-footer">
+    {footer}
+  </p>
 </Card>
+
+<script>
+  import {
+    loadOilFile,
+    formatChange,
+    formatPrice,
+    formatAdjustDate,
+    formatCountdown,
+    changeClass,
+  } from '../lib/oilPrice'
+  import { OIL_PRICE } from '../lib/constants'
+
+  const render = (snapshot: {
+    province: string
+    updateDate: string
+    nextAdjustDate: string
+    daysRemaining: number
+    grades: {
+      grade: string
+      price: number
+      change: number | null
+      expected: number | null
+    }[]
+  }) => {
+    for (const grade of snapshot.grades) {
+      const priceEl = document.querySelector<HTMLElement>(
+        `[data-oil-price="${grade.grade}"]`,
+      )
+      const changeEl = document.querySelector<HTMLElement>(
+        `[data-oil-change="${grade.grade}"]`,
+      )
+      const expectedEl = document.querySelector<HTMLElement>(
+        `[data-oil-expected="${grade.grade}"]`,
+      )
+
+      if (priceEl) priceEl.textContent = formatPrice(grade.price)
+      if (changeEl) {
+        changeEl.textContent = formatChange(grade.change)
+        changeEl.className = `text-xs tabular-nums ${changeClass(grade.change)}`
+      }
+      if (expectedEl)
+        expectedEl.textContent = `→ ${formatPrice(grade.expected)}`
+    }
+
+    const subtitleEl = document.querySelector<HTMLElement>('#oil-subtitle')
+    if (subtitleEl) {
+      const updated =
+        snapshot.updateDate.length >= 10
+          ? snapshot.updateDate.slice(5)
+          : snapshot.updateDate
+      subtitleEl.textContent = `${snapshot.province} · ${updated} 更新`
+    }
+
+    const footerEl = document.querySelector<HTMLElement>('#oil-footer')
+    if (footerEl) {
+      footerEl.textContent = snapshot.nextAdjustDate
+        ? `下次调价 ${formatAdjustDate(snapshot.nextAdjustDate)}24时（${formatCountdown(
+            snapshot.daysRemaining,
+          )}）· 仅供参考`
+        : '调价时间待公布 · 仅供参考'
+    }
+  }
+
+  const refresh = async () => {
+    const snapshot = await loadOilFile('/oil-price.json', OIL_PRICE.province)
+    if (!snapshot) return
+
+    const list = document.querySelector<HTMLElement>('#oil-list')
+    const current = Number(list?.dataset.oilFetchedAt ?? 0)
+    if (snapshot.fetchedAt <= current) return
+
+    render(snapshot)
+    if (list) list.dataset.oilFetchedAt = String(snapshot.fetchedAt)
+  }
+
+  refresh()
+  // 服务端每天零点更新一次数据文件，这里定期同步，页面一直开着也能拿到新值
+  setInterval(refresh, 30 * 60 * 1000)
+</script>

@@ -1,0 +1,67 @@
+name: Refresh oil price
+
+# 单独一个工作流：定时刷新首页「今日油价」卡片的数据文件，
+# 只更新 public/oil-price.json 并塞进正在跑的容器，
+# 不重建镜像、不重启站点、没有停机。
+on:
+  # 每天 00:07（北京时间）跑一次。GitHub Actions 的 cron 用 UTC，
+  # 16 点 UTC = 次日 0 点北京，正好赶在每日额度重置之后
+  schedule:
+    - cron: "7 16 * * *"
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    name: Refresh oil price data
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 以站点上正在用的那份数据为基准，避免重复消耗上游额度
+      - name: Use live data as baseline
+        run: |
+          curl -sS --max-time 15 "https://${{ secrets.DOMAIN }}/oil-price.json" -o oil-price-current.json || true
+          if [ -f oil-price-current.json ] && node -e "JSON.parse(require('fs').readFileSync('oil-price-current.json','utf8'))" 2>/dev/null; then
+            cp oil-price-current.json public/oil-price.json
+            echo "[oil-price] 已用站点上的数据作为基准"
+          fi
+
+      - name: Fetch oil price
+        env:
+          APIZERO_KEY: ${{ secrets.APIZERO_KEY }}
+        run: node scripts/fetch-oil-price.mjs
+
+      - name: Upload oil price data
+        uses: appleboy/scp-action@v1
+        continue-on-error: true
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          source: "public/oil-price.json"
+          target: "~/blog"
+
+      # 直接把新文件放进正在跑的容器，不用重建镜像、不用重启站点
+      - name: Copy into running container
+        uses: appleboy/ssh-action@v1
+        continue-on-error: true
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: |
+            cd ~/blog
+            for i in 1 2 3; do
+              if docker compose cp oil-price.json web:/usr/share/nginx/html/oil-price.json; then
+                echo "[oil-price] 容器内的数据文件已更新"
+                exit 0
+              fi
+              sleep 10
+            done
+            echo "[oil-price] 更新容器内数据文件失败（站点可能正在部署，下一轮会重试）"

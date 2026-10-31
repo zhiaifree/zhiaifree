@@ -77,6 +77,53 @@ cd ~/blog && docker compose logs -f caddy
 
 > 部署失败时先看 GitHub Actions 的日志，脚本里的报错信息会指明缺什么（如未设置 DOMAIN Secret、服务器未装 compose 插件等）。
 
+## 首页「今日油价」卡片
+
+首页 `Now` 卡片已改为「今日油价」，展示 92# / 95# / 98# 的当日油价，以及本轮**预计调整幅度、调价后价格与调价时间**。
+
+### 数据链路
+
+```
+scripts/fetch-oil-price.mjs ──抓上游──> public/oil-price.json ──> 构建进 dist
+                                                              └─> 浏览器同源读取 /oil-price.json
+```
+
+浏览器只读同源的 `/oil-price.json`，不消耗上游接口额度，也没有跨域问题。
+
+两条刷新路径：
+
+| 触发方式 | 做什么 | 频率 |
+|----------|--------|------|
+| `.github/workflows/refresh-oil-price.yml` | 只抓数据 → 上传服务器 → `docker compose cp` 进正在跑的容器。**不重建镜像、不重启站点、没有停机** | 每天 00:07（北京时间） |
+| `.github/workflows/deploy.yml` | 抓数据 → 打进镜像 → 重新部署 | 每次 push + 每天 11:17（北京时间） |
+
+- 上游接口挂掉时脚本**保留已有数据**并以 0 退出，不会让构建失败；价格接口挂了但预测接口还活着时，只刷新预测
+- 抓取脚本带节流：`public/oil-price.json` 里的 `fetchedAt` 距今不足 `OIL_PRICE_MIN_REFRESH_MINUTES`（默认 80 分钟）就跳过，重复 push 不会白耗上游额度
+- 两次刷新都会先 `curl` 站点上正在用的那份数据当基准，接口额度有限，别浪费
+
+### 相关环境变量
+
+| 变量 | 作用 | 默认 |
+|------|------|------|
+| `OIL_PRICE_PROVINCE` | 展示哪个省的油价（临时覆盖用） | 读 `src/lib/constants.ts` 的 `OIL_PRICE.province`，即「江苏」 |
+| `OIL_PRICE_MIN_REFRESH_MINUTES` | 最短刷新间隔（分钟），数据没这么旧就不重新抓 | `80` |
+| `OIL_PRICE_FORCE` | 设为 `1` 忽略上面的间隔，强制抓一次 | 无 |
+| `APIZERO_KEY` | apizero 的 API Key。**不配也能跑**（见下方说明），配了只是更稳 | 无 |
+| `APIHZ_ID` / `APIHZ_KEY` | 接口盒的公共 ID / KEY，主接口不可用时的备用价格源 | 无 |
+
+> **不配 Key 也能用**：上游匿名额度是每个接口每天 5 次，抓一轮用 2 个请求，**每天刷一次完全够**（当前配置就是每天零点刷一次）。
+> 唯一的小风险是 CI 的 IP 是共享的，匿名额度可能被别的任务先花掉 —— 抓不到时脚本会沿用上一份数据，站点照常显示，只是数据停在上一轮。介意的话再去 `apizero.cn/account/keys` 注册个免费 Key（登录后 20 次/天），填到 GitHub Secrets 的 `APIZERO_KEY` 即可。
+>
+> **改省份只需改一处**：`src/lib/constants.ts` 里的 `OIL_PRICE.province`，抓取脚本会自动读取。
+>
+> 省份是省一级的零售限价，同省各城市一致；江苏等省份的 98# 在部分数据源里记作「爱跑 98」，脚本已做兼容。
+
+### 手动刷新数据
+
+```bash
+pnpm oil      # 重新抓一次并写入 public/oil-price.json
+```
+
 ## 多项目共用 HTTPS 网关（Node.js 等新项目接入）
 
 Caddy 是全服务器唯一监听 80/443/3000/3001 的进程，所有项目共用它做 HTTPS。证书按域名签发、与端口无关，全部端口复用同一张自动续期的证书：

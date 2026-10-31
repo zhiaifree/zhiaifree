@@ -19,6 +19,15 @@ export const SITE = {
   },
 };
 
+/**
+ * 「今日油价」卡片配置
+ * - province：展示的省份 / 直辖市。改这一处即可，
+ *   抓取脚本 scripts/fetch-oil-price.mjs 会读取这里的值
+ */
+export const OIL_PRICE = {
+  province: "江苏",
+};
+
 export const LINKS = {
   github: "https://github.com/zhiaifree",
   discord: "https://discordapp.com/users/163300027618295808",

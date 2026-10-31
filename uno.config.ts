@@ -2,6 +2,8 @@
 import { defineConfig, presetUno, presetWebFonts } from "unocss";
 
 export default defineConfig({
+  // 动态拼接出来的类名（油价涨跌配色）扫不到，单独兜底
+  safelist: ["text-red-400", "text-green-400", "text-gray-400", "text-gray-500"],
   content: {
     filesystem: [
       // Narrow scope to specific directories
