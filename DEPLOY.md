@@ -4,8 +4,10 @@
 
 ```
 GitHub push
-   └─> GitHub Actions：构建镜像 → 推送到 GHCR → SSH 到服务器
-         └─> 服务器：docker compose 拉起新镜像 + Caddy
+   └─> GitHub Actions（三个 job，部署与镜像构建并行）
+         ├─ build       ：抓油价 → pnpm 构建 dist/ → 打包 site.tar.gz
+         ├─ deploy      ：上传 site.tar.gz → 服务器 → 换进正在跑的 nginx 容器 → 公网校验
+         └─ build-image ：构建 Docker 镜像 → 推送到 GHCR（备用，不阻塞部署）
 用户 ──HTTPS──> Caddy（80/443/3000/3001，全服务器唯一入口）
                  ├─ zhiaifree.cn        → nginx（Astro 静态站点）
                  ├─ zhiaifree.cn:3000   → Node 项目 1（容器名 nodeapp1）
@@ -19,6 +21,8 @@ GitHub push
 - **HTTP 自动跳转 HTTPS**
 - 证书保存在 `caddy_data` 数据卷中，容器重启/重建后不会重复申请
 
+**站点更新走「换静态文件」而不是「换镜像」**：CI 把构建好的 `dist/` 打包传到服务器，直接替换掉运行中 nginx 容器的 `/usr/share/nginx/html` 目录。好处是**不拉镜像、不重建容器、没有停机**，几十秒就能完成（原因见下方「部署方式变更」）。
+
 部署架构与配置文件：
 
 | 文件 | 作用 |
@@ -26,10 +30,31 @@ GitHub push
 | `Dockerfile` | 构建 Astro 静态站点镜像（nginx），未改动 |
 | `docker-compose.yml` | 编排 web（站点）+ caddy（HTTPS 网关）；服务器通过 `WEB_IMAGE` / `CADDY_IMAGE` 变量使用 GHCR 预构建镜像 |
 | `Caddyfile` | Caddy 配置（域名、反向代理、压缩、安全头） |
-| `.github/workflows/deploy.yml` | push 到 main 自动构建镜像并部署到服务器（含 compose 配置同步、部署后健康检查） |
+| `.github/workflows/deploy.yml` | push 到 main 自动部署（构建静态文件 → 上传服务器 → 换进 nginx 容器 → 公网校验），同时并行构建镜像推到 GHCR |
 | `.env.example` | 域名配置模板 |
 
 > **为什么 Caddy 镜像要走 GHCR 转存**：国内云服务器直连 Docker Hub 拉取镜像经常超时/极慢（曾导致一次部署假成功——容器没起来但 CI 显示绿色）。因此 CI 每次构建时会把 `caddy:2-alpine` 转存为 `ghcr.io/<仓库>:caddy-2-alpine`，服务器全部镜像统一从 GHCR 拉取。部署脚本使用显式错误检查和健康检查（Caddy 必须在 80 端口响应，否则 CI 直接报红并输出容器日志）。
+
+### 部署方式变更：镜像拉取 → 直接换静态文件
+
+原先部署是「CI 推镜像 → 服务器 `docker compose pull && up -d`」。实际跑下来这条链路在国内服务器上**又慢又不稳**：拉一次镜像要 13～14 分钟，2026-10-31 那次拉了 13 分钟后直接失败，站点停在旧版本。
+
+静态站其实不需要每次都换镜像——**页面内容全在 `dist/` 里**，所以改成：
+
+1. CI 在 runner 上 `pnpm install && astro build`，把 `dist/` 打包成 `site.tar.gz`（约 1.1 MB）
+2. 上传到服务器 `~/blog`，解包后用 tar 管道传进运行中的 `web` 容器的 `/tmp/newhtml`
+3. 容器内 `mv` 原子替换 `/usr/share/nginx/html`，旧目录留作回滚，md5 不一致就自动回滚
+4. 最后走公网域名校验首页确实是新版本、`/oil-price.json` 可访问
+
+| 对比项 | 旧（拉镜像） | 新（换静态文件） |
+|--------|-------------|-----------------|
+| 耗时 | 13～14 分钟，且可能失败 | 约 1 分钟 |
+| 是否重建容器 | 是（会中断） | 否，零停机 |
+| 依赖镜像仓库 | 是（国内拉 GHCR 不稳） | 否 |
+| 镜像内容 | 随每次部署更新 | 仍会推到 GHCR，但服务器不主动拉 |
+
+> 镜像构建保留在 `build-image` job 里并继续推送到 GHCR，与部署并行。**它失败不会影响站点更新**。
+> 唯一需要注意：服务器上的 `web` 容器跑的仍是当初那个镜像，站点内容来自容器里被替换过的 `/usr/share/nginx/html`（容器可写层，重启服务器不会丢）。如果你在服务器上手动执行 `docker compose pull && docker compose up -d`，容器会被重建、站点会回到镜像里的内容——那就再 push 一次代码让 CI 重新覆盖即可。
 
 > 注意：`.env` 在 `.gitignore` 中不会被推送。**服务器上的 `.env` 由部署脚本每次自动生成**（域名来自 GitHub Secrets 中的 `DOMAIN`），本地 `.env` 只用于本地测试。
 
@@ -63,7 +88,7 @@ GitHub push
 git add . && git commit -m "..." && git push
 ```
 
-GitHub Actions 会自动完成：构建镜像 → 推送 GHCR → 上传 compose 配置到服务器 `~/blog` → 生成 `.env` → `docker compose pull && up -d` → 清理旧镜像和旧的 `astro-blog` 容器。
+GitHub Actions 会自动完成：抓一次油价 → 构建 `dist/` → 打包上传到服务器 `~/blog` → 换进运行中的 nginx 容器 → 走公网域名校验新版本已上线。同时并行构建 Docker 镜像推送到 GHCR。
 
 首次部署后查看证书申请情况：
 
@@ -95,7 +120,7 @@ scripts/fetch-oil-price.mjs ──抓上游──> public/oil-price.json ──>
 | 触发方式 | 做什么 | 频率 |
 |----------|--------|------|
 | `.github/workflows/refresh-oil-price.yml` | 只抓数据 → 上传服务器 → `docker compose cp` 进正在跑的容器。**不重建镜像、不重启站点、没有停机** | 每天 00:07（北京时间） |
-| `.github/workflows/deploy.yml` | 抓数据 → 打进镜像 → 重新部署 | 每次 push + 每天 11:17（北京时间） |
+| `.github/workflows/deploy.yml` | 抓数据 → 打进静态文件 → 换进正在跑的 nginx 容器 | 每次 push |
 
 - 上游接口挂掉时脚本**保留已有数据**并以 0 退出，不会让构建失败；价格接口挂了但预测接口还活着时，只刷新预测
 - 抓取脚本带节流：`public/oil-price.json` 里的 `fetchedAt` 距今不足 `OIL_PRICE_MIN_REFRESH_MINUTES`（默认 80 分钟）就跳过，重复 push 不会白耗上游额度
@@ -165,11 +190,32 @@ Caddy 是全服务器唯一监听 80/443/3000/3001 的进程，所有项目共�
 - Caddy 使用 ACME 协议，证书剩余约 **30 天** 时自动续期，全程无感，**不需要任何手动操作或定时任务**。
 - 续期依赖 80/443 端口持续可达，保持安全组放行即可。
 - 证书存储在 `caddy_data` 数据卷中，**不要删除该卷**，否则会重新申请证书（Let's Encrypt 有每周 5 次同名证书的限流，频繁重置可能触发限流被暂时封禁）。
-- 每次代码部署会重建 web 容器但**不会**动证书数据卷，续期不受部署影响。
+- 每次代码部署会替换 web 容器里的站点文件但**不会**动证书数据卷，续期不受部署影响。
 
 ## 手动部署（备用）
 
-不想走 GitHub Actions 时，在服务器上执行：
+不想走 GitHub Actions 时，在服务器上执行。
+
+**方式一：换静态文件**（和 CI 一致，推荐）
+
+```bash
+# 先在本地构建并打包
+pnpm install --frozen-lockfile && pnpm exec astro build
+tar czf site.tar.gz -C dist .
+
+# 传到服务器后执行
+cd ~/blog
+echo "DOMAIN=你的域名" > .env
+rm -rf newhtml && mkdir -p newhtml
+cd newhtml && tar xzf ../site.tar.gz && cd ..
+docker compose exec -T web sh -c 'rm -rf /tmp/newhtml && mkdir -p /tmp/newhtml'
+tar cf - -C newhtml . | docker compose exec -T web sh -c 'cd /tmp/newhtml && tar xf -'
+docker compose exec -T web sh -c 'chmod -R a+rX /tmp/newhtml'
+docker compose exec -T web sh -c 'rm -rf /usr/share/nginx/html.old && mv /usr/share/nginx/html /usr/share/nginx/html.old && mv /tmp/newhtml /usr/share/nginx/html'
+docker compose exec -T web sh -c 'rm -rf /usr/share/nginx/html.old'
+```
+
+**方式二：整体重建容器**（会用镜像里的内容覆盖站点，国内拉镜像很慢）
 
 ```bash
 # docker-compose.yml 和 Caddyfile 可从仓库复制到 ~/blog

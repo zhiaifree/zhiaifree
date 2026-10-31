@@ -3,18 +3,15 @@ name: Build, Push and Deploy
 on:
   push:
     branches: [ "main" ]
-  # 每天定时重建一次，让首页「今日油价」卡片保持最新
-  # 不想要每天自动部署的话，删掉下面这段 schedule 即可
-  schedule:
-    - cron: "17 3 * * *"
+  # 每天的数据刷新由 refresh-oil-price.yml 负责（只换静态文件，不重新部署），
+  # 所以这里保持原来的「只有 push 才部署」即可
 
 jobs:
-  build-and-push:
+  # ── 1. 构建静态文件 ─────────────────────────────────────────────
+  build:
     runs-on: ubuntu-latest
     permissions:
       contents: read
-      packages: write
-
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
@@ -25,13 +22,163 @@ jobs:
           curl -sS --max-time 15 "https://${{ secrets.DOMAIN }}/oil-price.json" -o oil-price-current.json || true
           if [ -f oil-price-current.json ] && node -e "JSON.parse(require('fs').readFileSync('oil-price-current.json','utf8'))" 2>/dev/null; then
             cp oil-price-current.json public/oil-price.json
+            echo "[oil-price] 已用站点上的数据作为基准"
           fi
+          rm -f oil-price-current.json
 
       # 抓一次今日油价写进 public/oil-price.json（接口不可用时保留仓库里的旧数据）
       - name: Fetch oil price
         env:
           APIZERO_KEY: ${{ secrets.APIZERO_KEY }}
         run: node scripts/fetch-oil-price.mjs
+
+      - name: Setup pnpm
+        uses: pnpm/action-setup@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      # 构建静态文件（和 Dockerfile 里的构建步骤一致）
+      - name: Build static site
+        run: |
+          pnpm exec astro build
+          tar czf site.tar.gz -C dist .
+          ls -lh site.tar.gz
+
+      - name: Upload static site
+        uses: actions/upload-artifact@v4
+        with:
+          name: site
+          path: site.tar.gz
+          retention-days: 1
+
+  # ── 2. 把静态文件换进服务器上正在跑的 nginx 容器 ─────────────────
+  # 不用拉镜像、不重建容器：既绕开了国内服务器拉 GHCR 又慢又不稳的问题，也没有停机。
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Download static site
+        uses: actions/download-artifact@v4
+        with:
+          name: site
+
+      - name: Prepare deploy directory on server
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          script: mkdir -p ~/blog
+
+      - name: Upload static files to server
+        uses: appleboy/scp-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          source: "site.tar.gz,docker-compose.yml,Caddyfile"
+          target: "~/blog"
+
+      - name: Deploy static files
+        env:
+          DOMAIN: ${{ secrets.DOMAIN }}
+        uses: appleboy/ssh-action@v1
+        with:
+          host: ${{ secrets.SSH_HOST }}
+          username: ${{ secrets.SSH_USER }}
+          key: ${{ secrets.SSH_PRIVATE_KEY }}
+          port: ${{ secrets.SSH_PORT }}
+          command_timeout: 15m
+          script: |
+            set -e
+            cd ~/blog
+
+            # compose 里 caddy 服务用了 DOMAIN=${DOMAIN:?...}，.env 缺失会让所有 compose 命令直接失败
+            echo "DOMAIN=$DOMAIN" > .env
+
+            # 早期不用 compose 时留下的裸 nginx 容器，占着 80 端口，不存在就忽略
+            docker rm -f astro-blog 2>/dev/null || true
+
+            if [ -z "$(docker compose ps -q web)" ]; then
+              if [ -n "$(docker compose ps -aq web)" ]; then
+                echo "[deploy] web 容器处于停止状态，正在启动"
+                docker compose start web
+                sleep 3
+              else
+                echo "错误：web 容器不存在，请到服务器上执行 docker compose up -d 后再重试"
+                exit 1
+              fi
+            fi
+
+            echo "[deploy] 解包静态文件"
+            rm -rf newhtml && mkdir -p newhtml
+            cd newhtml && tar xzf ../site.tar.gz && cd ..
+
+            echo "[deploy] 传入容器临时目录"
+            docker compose exec -T web sh -c 'rm -rf /tmp/newhtml && mkdir -p /tmp/newhtml'
+            tar cf - -C newhtml . | docker compose exec -T web sh -c 'cd /tmp/newhtml && tar xf -'
+            docker compose exec -T web sh -c 'chmod -R a+rX /tmp/newhtml'
+
+            echo "[deploy] 原子替换站点目录"
+            docker compose exec -T web sh -c 'rm -rf /usr/share/nginx/html.old && mv /usr/share/nginx/html /usr/share/nginx/html.old && mv /tmp/newhtml /usr/share/nginx/html'
+
+            LOCAL_MD5=$(md5sum newhtml/index.html | cut -d" " -f1)
+            DOCKER_MD5=$(docker compose exec -T web md5sum /usr/share/nginx/html/index.html | cut -d" " -f1)
+            if [ "$LOCAL_MD5" != "$DOCKER_MD5" ]; then
+              echo "错误：部署后校验不一致（本地 $LOCAL_MD5 / 容器 $DOCKER_MD5），正在回滚"
+              docker compose exec -T web sh -c 'rm -rf /usr/share/nginx/html && mv /usr/share/nginx/html.old /usr/share/nginx/html'
+              exit 1
+            fi
+
+            docker compose exec -T web sh -c 'rm -rf /usr/share/nginx/html.old'
+            rm -rf newhtml site.tar.gz
+            echo "[deploy] 静态文件已替换完成（index.html md5 = $LOCAL_MD5）"
+            docker compose ps
+
+      # 端到端校验：走公网域名确认新版本真的上线了
+      - name: Verify site
+        env:
+          DOMAIN: ${{ secrets.DOMAIN }}
+        run: |
+          set -e
+          OK=0
+          for i in 1 2 3 4 5 6; do
+            if curl -sS --max-time 15 "https://$DOMAIN/" | grep -q "data-oil-price"; then
+              OK=1
+              break
+            fi
+            sleep 5
+          done
+          if [ "$OK" != "1" ]; then
+            echo "错误：线上首页仍然不是新版本"
+            exit 1
+          fi
+          echo "[deploy] 线上首页已是新版本"
+          curl -sS --max-time 15 -o oil-price-live.json -w "oil-price.json HTTP %{http_code}\n" "https://$DOMAIN/oil-price.json"
+          grep -q '"province"' oil-price-live.json || { echo "错误：oil-price.json 内容异常"; exit 1; }
+          echo "[deploy] 数据文件校验通过"
+
+  # ── 3. 构建并推送 Docker 镜像（保留 GHCR 里的最新镜像）──────────
+  # 和部署并行，即使镜像构建失败也不影响站点更新
+  build-image:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
 
       - name: Log in to GitHub Container Registry
         uses: docker/login-action@v3
@@ -53,67 +200,3 @@ jobs:
           docker pull caddy:2-alpine
           docker tag caddy:2-alpine ghcr.io/${{ github.repository }}:caddy-2-alpine
           docker push ghcr.io/${{ github.repository }}:caddy-2-alpine
-
-  deploy:
-    needs: build-and-push
-    runs-on: ubuntu-latest
-    permissions:
-      contents: read
-    steps:
-      - name: Checkout repository
-        uses: actions/checkout@v4
-
-      - name: Prepare deploy directory on server
-        uses: appleboy/ssh-action@v1
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          script: mkdir -p ~/blog
-
-      - name: Upload compose config to server
-        uses: appleboy/scp-action@v1
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          source: "docker-compose.yml,Caddyfile"
-          target: "~/blog"
-
-      - name: Deploy to server via SSH
-        uses: appleboy/ssh-action@v1
-        env:
-          DOMAIN: ${{ secrets.DOMAIN }}
-          WEB_IMAGE: ghcr.io/${{ github.repository }}:latest
-          CADDY_IMAGE: ghcr.io/${{ github.repository }}:caddy-2-alpine
-        with:
-          host: ${{ secrets.SSH_HOST }}
-          username: ${{ secrets.SSH_USER }}
-          key: ${{ secrets.SSH_PRIVATE_KEY }}
-          port: ${{ secrets.SSH_PORT }}
-          command_timeout: 30m
-          envs: DOMAIN,WEB_IMAGE,CADDY_IMAGE
-          script: |
-            docker compose version >/dev/null 2>&1 || { echo "错误：服务器未安装 Docker Compose 插件，请先安装（apt install docker-compose-plugin 或升级 Docker）"; exit 1; }
-            [ -n "$DOMAIN" ] || { echo "错误：GitHub Secrets 中未设置 DOMAIN，请到仓库 Settings → Secrets and variables → Actions 添加 DOMAIN=你的域名"; exit 1; }
-            # 旧的裸 nginx 容器占用 80 端口，先移除（不存在则忽略）
-            docker rm -f astro-blog 2>/dev/null || true
-            cd ~/blog
-            [ -f docker-compose.yml ] || { echo "错误：~/blog 中缺少 docker-compose.yml，compose 配置上传失败"; exit 1; }
-            echo "DOMAIN=$DOMAIN" > .env
-            docker compose pull || { echo "错误：镜像拉取失败，请检查 GHCR 镜像是否可见/服务器网络"; exit 1; }
-            docker compose up -d --remove-orphans || { echo "错误：容器启动失败"; exit 1; }
-            sleep 5
-            docker compose ps
-            # 健康检查：Caddy 必须在 80 端口响应（带 Host 头命中站点，正常应返回 308 跳转 HTTPS）
-            CODE=$(curl -s --max-time 8 -H "Host: $DOMAIN" -o /dev/null -w "%{http_code}" http://127.0.0.1)
-            if [ "$CODE" = "000" ]; then
-              echo "错误：Caddy 未在 80 端口响应，Caddy 最近日志："
-              docker compose logs --tail 40 caddy
-              exit 1
-            fi
-            echo "健康检查通过：Caddy 已响应（HTTP $CODE）"
-            docker compose logs --tail 15 caddy
-            docker image prune -f
