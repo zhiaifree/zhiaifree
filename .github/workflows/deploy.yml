@@ -117,13 +117,13 @@ jobs:
             # 早期不用 compose 时留下的裸 nginx 容器，占着 80 端口，不存在就忽略
             docker rm -f astro-blog 2>/dev/null || true
 
-            WEB_ID=$(docker compose ps -q web 2>/tmp/compose_err) || {
+            WEB_ID=$(docker compose ps -q web < /dev/null 2>/tmp/compose_err) || {
               echo "错误：docker compose 执行失败："
               cat /tmp/compose_err
               exit 1
             }
             if [ -z "$WEB_ID" ]; then
-              if [ -n "$(docker compose ps -aq web)" ]; then
+              if [ -n "$(docker compose ps -aq web < /dev/null)" ]; then
                 echo "[deploy] web 容器处于停止状态，正在启动"
                 docker compose start web
                 sleep 3
