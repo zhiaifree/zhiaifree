@@ -50,13 +50,20 @@ jobs:
       - name: Copy into running container
         uses: appleboy/ssh-action@v1
         continue-on-error: true
+        env:
+          DOMAIN: ${{ secrets.DOMAIN }}
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT }}
+          # 注意：envs 必须列出来，否则环境变量不会转发到远端脚本里
+          envs: DOMAIN
           script: |
+            set -e
             cd ~/blog
+            # compose 里 caddy 服务用了 DOMAIN=${DOMAIN:?...}，.env 缺失会让所有 compose 命令直接失败
+            echo "DOMAIN=$DOMAIN" > .env
             for i in 1 2 3; do
               if docker compose cp oil-price.json web:/usr/share/nginx/html/oil-price.json; then
                 echo "[oil-price] 容器内的数据文件已更新"
