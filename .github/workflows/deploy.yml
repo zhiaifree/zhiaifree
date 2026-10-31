@@ -99,10 +99,17 @@ jobs:
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT }}
+          # 注意：envs 必须列出来，否则环境变量不会转发到远端脚本里
+          envs: DOMAIN
           command_timeout: 15m
           script: |
             set -e
             cd ~/blog
+
+            if [ -z "$DOMAIN" ]; then
+              echo "错误：DOMAIN 为空，请检查 GitHub Secrets 里的 DOMAIN 是否已配置"
+              exit 1
+            fi
 
             # compose 里 caddy 服务用了 DOMAIN=${DOMAIN:?...}，.env 缺失会让所有 compose 命令直接失败
             echo "DOMAIN=$DOMAIN" > .env
@@ -110,7 +117,12 @@ jobs:
             # 早期不用 compose 时留下的裸 nginx 容器，占着 80 端口，不存在就忽略
             docker rm -f astro-blog 2>/dev/null || true
 
-            if [ -z "$(docker compose ps -q web)" ]; then
+            WEB_ID=$(docker compose ps -q web 2>/tmp/compose_err) || {
+              echo "错误：docker compose 执行失败："
+              cat /tmp/compose_err
+              exit 1
+            }
+            if [ -z "$WEB_ID" ]; then
               if [ -n "$(docker compose ps -aq web)" ]; then
                 echo "[deploy] web 容器处于停止状态，正在启动"
                 docker compose start web
@@ -126,22 +138,23 @@ jobs:
             cd newhtml && tar xzf ../site.tar.gz && cd ..
 
             echo "[deploy] 传入容器临时目录"
-            docker compose exec -T web sh -c 'rm -rf /tmp/newhtml && mkdir -p /tmp/newhtml'
-            tar cf - -C newhtml . | docker compose exec -T web sh -c 'cd /tmp/newhtml && tar xf -'
-            docker compose exec -T web sh -c 'chmod -R a+rX /tmp/newhtml'
+            docker compose exec -T web sh -c 'rm -rf /tmp/newhtml && mkdir -p /tmp/newhtml' < /dev/null
+            # 注意：-i 必须加，否则容器里的 tar 读不到管道数据；stdin 也别让它碰到脚本本身
+            tar cf - -C newhtml . | docker compose exec -T -i web sh -c 'cd /tmp/newhtml && tar xf -'
+            docker compose exec -T web sh -c 'chmod -R a+rX /tmp/newhtml' < /dev/null
 
             echo "[deploy] 原子替换站点目录"
-            docker compose exec -T web sh -c 'rm -rf /usr/share/nginx/html.old && mv /usr/share/nginx/html /usr/share/nginx/html.old && mv /tmp/newhtml /usr/share/nginx/html'
+            docker compose exec -T web sh -c 'rm -rf /usr/share/nginx/html.old && mv /usr/share/nginx/html /usr/share/nginx/html.old && mv /tmp/newhtml /usr/share/nginx/html' < /dev/null
 
             LOCAL_MD5=$(md5sum newhtml/index.html | cut -d" " -f1)
-            DOCKER_MD5=$(docker compose exec -T web md5sum /usr/share/nginx/html/index.html | cut -d" " -f1)
+            DOCKER_MD5=$(docker compose exec -T web md5sum /usr/share/nginx/html/index.html < /dev/null | cut -d" " -f1)
             if [ "$LOCAL_MD5" != "$DOCKER_MD5" ]; then
               echo "错误：部署后校验不一致（本地 $LOCAL_MD5 / 容器 $DOCKER_MD5），正在回滚"
-              docker compose exec -T web sh -c 'rm -rf /usr/share/nginx/html && mv /usr/share/nginx/html.old /usr/share/nginx/html'
+              docker compose exec -T web sh -c 'rm -rf /usr/share/nginx/html && mv /usr/share/nginx/html.old /usr/share/nginx/html' < /dev/null
               exit 1
             fi
 
-            docker compose exec -T web sh -c 'rm -rf /usr/share/nginx/html.old'
+            docker compose exec -T web sh -c 'rm -rf /usr/share/nginx/html.old' < /dev/null
             rm -rf newhtml site.tar.gz
             echo "[deploy] 静态文件已替换完成（index.html md5 = $LOCAL_MD5）"
             docker compose ps

@@ -194,7 +194,16 @@ Caddy 是全服务器唯一监听 80/443/3000/3001 的进程，所有项目共�
 
 ## 手动部署（备用）
 
-不想走 GitHub Actions 时，在服务器上执行。
+不想走 GitHub Actions 时，**推荐用仓库里的脚本**（它会直接从 `deploy.yml` 里抽取部署脚本，和 CI 跑的是同一份）：
+
+```bash
+pnpm deploy          # 用当前 dist/ 直接推上服务器
+pnpm deploy:build    # 先本地构建再推
+```
+
+可覆盖的环境变量：`SSH_HOST` / `SSH_USER` / `SSH_KEY` / `DOMAIN`。
+
+纯手工的话，在服务器上执行：
 
 **方式一：换静态文件**（和 CI 一致，推荐）
 
