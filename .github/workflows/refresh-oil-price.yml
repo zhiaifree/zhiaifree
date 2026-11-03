@@ -70,18 +70,23 @@ jobs:
             # compose 里 caddy 服务用了 DOMAIN=${DOMAIN:?...}，.env 缺失会让所有 compose 命令直接失败
             echo "DOMAIN=$DOMAIN" > .env
 
-            # 两个位置都找一下，兼容历史遗留的目录层级
+            # 两个位置都找一下，兼容历史遗留的目录层级；取 fetchedAt 最新的那个
             SRC=""
+            WANT=0
             for c in oil-price.json public/oil-price.json; do
-              if [ -f "$c" ]; then SRC="$c"; break; fi
+              if [ -f "$c" ]; then
+                TS=$(grep -o '"fetchedAt": *[0-9]*' "$c" | grep -o '[0-9]*' | head -1)
+                if [ -n "$TS" ] && [ "$TS" -gt "$WANT" ]; then
+                  WANT="$TS"
+                  SRC="$c"
+                fi
+              fi
             done
             if [ -z "$SRC" ]; then
               echo "错误：服务器 ~/blog 下找不到 oil-price.json（scp 可能没送达）"
               exit 1
             fi
-            echo "[oil-price] 使用 $SRC"
-
-            WANT=$(grep -o '"fetchedAt": *[0-9]*' "$SRC" | grep -o '[0-9]*')
+            echo "[oil-price] 使用 $SRC（fetchedAt=$WANT）"
             for i in 1 2 3; do
               if docker compose cp "$SRC" web:/usr/share/nginx/html/oil-price.json; then
                 GOT=$(docker compose exec -T web sh -c "grep -o '\"fetchedAt\": *[0-9]*' /usr/share/nginx/html/oil-price.json" < /dev/null | grep -o '[0-9]*')
