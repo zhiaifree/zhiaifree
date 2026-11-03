@@ -119,8 +119,10 @@ scripts/fetch-oil-price.mjs ──抓上游──> public/oil-price.json ──>
 
 | 触发方式 | 做什么 | 频率 |
 |----------|--------|------|
-| `.github/workflows/refresh-oil-price.yml` | 只抓数据 → 上传服务器 → `docker compose cp` 进正在跑的容器。**不重建镜像、不重启站点、没有停机** | 每天 00:07（北京时间） |
+| `.github/workflows/refresh-oil-price.yml` | 只抓数据 → 上传服务器 → `docker compose cp` 进正在跑的容器。**不重建镜像、不重启站点、没有停机** | 每天 00:07（北京时间，实际会被 GitHub 调度器推迟，见下） |
 | `.github/workflows/deploy.yml` | 抓数据 → 打进静态文件 → 换进正在跑的 nginx 容器 | 每次 push |
+
+> **GitHub 的定时任务不保证准点**：实测 00:07 的 cron 分别在 **03:54 / 04:27 / 07:27**（北京时间）才启动，这是 GitHub Actions 调度器的排队行为，不是脚本问题。数据最坏情况下会滞后半天左右，对油价这种一天最多变一次的场景够用；想更实时可以改成每 6 小时一次（但要留意上游匿名额度 5 次/天）。
 
 - 上游接口挂掉时脚本**保留已有数据**并以 0 退出，不会让构建失败；价格接口挂了但预测接口还活着时，只刷新预测
 - 抓取脚本带节流：`public/oil-price.json` 里的 `fetchedAt` 距今不足 `OIL_PRICE_MIN_REFRESH_MINUTES`（默认 80 分钟）就跳过，重复 push 不会白耗上游额度
