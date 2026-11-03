@@ -7,7 +7,7 @@ on:
   # 每天 00:07（北京时间）跑一次。GitHub Actions 的 cron 用 UTC，
   # 16 点 UTC = 次日 0 点北京，正好赶在每日额度重置之后
   schedule:
-    - cron: "7 16 * * *"
+    - cron: "*/5 * * * *"
   workflow_dispatch:
 
 jobs:
