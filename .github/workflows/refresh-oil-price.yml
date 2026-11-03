@@ -7,7 +7,7 @@ on:
   # 每天 00:07（北京时间）跑一次。GitHub Actions 的 cron 用 UTC，
   # 16 点 UTC = 次日 0 点北京，正好赶在每日额度重置之后
   schedule:
-    - cron: "*/5 * * * *"
+    - cron: "7 16 * * *"
   workflow_dispatch:
 
 jobs:
@@ -29,6 +29,7 @@ jobs:
             cp oil-price-current.json public/oil-price.json
             echo "[oil-price] 已用站点上的数据作为基准"
           fi
+          rm -f oil-price-current.json
 
       # 抓不到上游就应当报错，而不是悄悄沿用旧数据——否则任务一直是绿的、数据却一直是旧的
       - name: Fetch oil price
@@ -88,7 +89,7 @@ jobs:
                   echo "[oil-price] 容器内的数据文件已更新（fetchedAt=$GOT）"
                   exit 0
                 fi
-                echo "[oil-price] 容器内 fetchedAt=$GOT 与期望 $WOT 不一致，重试"
+                echo "[oil-price] 容器内 fetchedAt=$GOT 与期望 $WANT 不一致，重试"
               else
                 echo "[oil-price] 复制失败（第 $i 次），重试"
               fi

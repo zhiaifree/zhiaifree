@@ -9,8 +9,9 @@
  *   OIL_PRICE_PROVINCE  省份 / 直辖市。默认读 src/lib/constants.ts 的 OIL_PRICE.province
  *   APIZERO_KEY          apizero 的 API Key（匿名额度只有 5 次/天，登录后 20 次/天，建议配置）
  *   APIHZ_ID / APIHZ_KEY 接口盒的公共 ID 与 KEY（apizero 挂了时的备用价格源）
- *   OIL_PRICE_MIN_REFRESH_MINUTES  最短刷新间隔（分钟）。上游是「每个接口每天 20 次」，
- *                                   24 次/天会超额度，所以默认按 ~90 分钟刷一次（16 次/天）
+ *   OIL_PRICE_MIN_REFRESH_MINUTES  最短刷新间隔（分钟）。上游匿名额度是「每个接口每天 5 次」，
+ *                                   默认 360 分钟（约 4 次/天）留出安全余量；
+ *                                   定时刷新是每天一次，24 小时 > 360 分钟，不受影响
  *   OIL_PRICE_FORCE=1              忽略上面的间隔，强制抓一次
  *   OIL_PRICE_STRICT=1             抓不到上游时以退出码 1 失败（定时刷新任务用，
  *                                   避免「任务全绿但数据一直是旧的」）
@@ -45,7 +46,7 @@ const APIZERO_KEY = process.env.APIZERO_KEY || "";
 const APIHZ_ID = process.env.APIHZ_ID || "";
 const APIHZ_KEY = process.env.APIHZ_KEY || "";
 const MIN_REFRESH_MINUTES = Number(
-  process.env.OIL_PRICE_MIN_REFRESH_MINUTES || 80,
+  process.env.OIL_PRICE_MIN_REFRESH_MINUTES || 360,
 );
 const FORCE = process.env.OIL_PRICE_FORCE === "1";
 const STRICT = process.env.OIL_PRICE_STRICT === "1";

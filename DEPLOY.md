@@ -125,7 +125,7 @@ scripts/fetch-oil-price.mjs ──抓上游──> public/oil-price.json ──>
 > **GitHub 的定时任务不保证准点**：实测 00:07 的 cron 分别在 **03:54 / 04:27 / 07:27**（北京时间）才启动，这是 GitHub Actions 调度器的排队行为，不是脚本问题。数据最坏情况下会滞后半天左右，对油价这种一天最多变一次的场景够用；想更实时可以改成每 6 小时一次（但要留意上游匿名额度 5 次/天）。
 
 - 上游接口挂掉时脚本**保留已有数据**并以 0 退出，不会让构建失败；价格接口挂了但预测接口还活着时，只刷新预测
-- 抓取脚本带节流：`public/oil-price.json` 里的 `fetchedAt` 距今不足 `OIL_PRICE_MIN_REFRESH_MINUTES`（默认 80 分钟）就跳过，重复 push 不会白耗上游额度
+- 抓取脚本带节流：`public/oil-price.json` 里的 `fetchedAt` 距今不足 `OIL_PRICE_MIN_REFRESH_MINUTES`（默认 **360 分钟**）就跳过。定时刷新是每天一次（24 小时 > 6 小时），照常抓；重复 push 不会白耗额度
 - 两次刷新都会先 `curl` 站点上正在用的那份数据当基准，接口额度有限，别浪费
 - **定时刷新任务用 `OIL_PRICE_STRICT=1`**：抓不到上游就以退出码 1 失败、任务变红，而不是悄悄沿用旧数据。构建流程不带这个变量（构建不该因为上游抖动而失败）
 
@@ -160,7 +160,8 @@ source: "public/oil-price.json" + target: "~/blog"
 | `APIHZ_ID` / `APIHZ_KEY` | 接口盒的公共 ID / KEY，主接口不可用时的备用价格源 | 无 |
 
 > **不配 Key 也能用**：上游匿名额度是每个接口每天 5 次，抓一轮用 2 个请求，**每天刷一次完全够**（当前配置就是每天零点刷一次）。
-> 唯一的小风险是 CI 的 IP 是共享的，匿名额度可能被别的任务先花掉 —— 抓不到时脚本会沿用上一份数据，站点照常显示，只是数据停在上一轮。介意的话再去 `apizero.cn/account/keys` 注册个免费 Key（登录后 20 次/天），填到 GitHub Secrets 的 `APIZERO_KEY` 即可。
+> 节流阈值设成 360 分钟是有意为之：这样**即使把 cron 改成很频繁，一天最多也只抓 4 次**，不会因为触发太勤把匿名额度耗光（额度耗光的表现正是「数据不更新」，很难一眼看出）。
+> 唯一的小风险是 CI 的 IP 是共享的，匿名额度可能被别的任务先花掉 —— 抓不到时**定时刷新任务会变红**（`OIL_PRICE_STRICT=1`），不会静默停在旧数据；介意的话再去 `apizero.cn/account/keys` 注册个免费 Key（登录后 20 次/天），填到 GitHub Secrets 的 `APIZERO_KEY` 即可。
 >
 > **改省份只需改一处**：`src/lib/constants.ts` 里的 `OIL_PRICE.province`，抓取脚本会自动读取。
 >
