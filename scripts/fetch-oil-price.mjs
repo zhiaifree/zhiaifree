@@ -12,6 +12,8 @@
  *   OIL_PRICE_MIN_REFRESH_MINUTES  最短刷新间隔（分钟）。上游是「每个接口每天 20 次」，
  *                                   24 次/天会超额度，所以默认按 ~90 分钟刷一次（16 次/天）
  *   OIL_PRICE_FORCE=1              忽略上面的间隔，强制抓一次
+ *   OIL_PRICE_STRICT=1             抓不到上游时以退出码 1 失败（定时刷新任务用，
+ *                                   避免「任务全绿但数据一直是旧的」）
  */
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
 import { dirname, resolve } from "node:path";
@@ -46,6 +48,7 @@ const MIN_REFRESH_MINUTES = Number(
   process.env.OIL_PRICE_MIN_REFRESH_MINUTES || 80,
 );
 const FORCE = process.env.OIL_PRICE_FORCE === "1";
+const STRICT = process.env.OIL_PRICE_STRICT === "1";
 
 const PRICE_API = "https://v1.apizero.cn/api/oil-price";
 const FORECAST_API =
@@ -153,6 +156,12 @@ const finalPrice = price ?? (await fetchApiHz());
 if (!finalPrice) {
   // 价格接口挂了、预测接口还活着：价格留着旧的，只把预测刷新掉
   if (existing?.price && forecast) {
+    if (STRICT) {
+      console.error(
+        "[oil-price] 严格模式：价格接口不可用（只拿到调价预测），本次刷新判定为失败",
+      );
+      process.exit(1);
+    }
     existing.forecast = forecast;
     existing.fetchedAt = Date.now();
     writeFileSync(OUT_FILE, JSON.stringify(existing, null, 2), "utf8");
@@ -163,6 +172,10 @@ if (!finalPrice) {
   console.warn(
     "[oil-price] 上游接口暂时不可用，保留 public/oil-price.json 里的旧数据",
   );
+  if (STRICT) {
+    console.error("[oil-price] 严格模式：上游接口不可用，本次刷新判定为失败");
+    process.exit(1);
+  }
   process.exit(0);
 }
 
@@ -183,6 +196,11 @@ const trend = forecast?.prediction
   ? `${forecast.prediction.direction} ${forecast.prediction.estimated_change_per_ton} 元/吨`
   : "预测暂缺";
 console.log(`[oil-price] ${payload.province} ${summary}  |  ${trend}`);
+console.log(
+  `[oil-price] 数据日期 ${finalPrice.update_date || "-"}，写入时间 ${new Date(
+    payload.fetchedAt,
+  ).toLocaleString("zh-CN")}`,
+);
 
 if (!APIZERO_KEY) {
   console.warn(

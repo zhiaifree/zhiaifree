@@ -125,6 +125,26 @@ scripts/fetch-oil-price.mjs ──抓上游──> public/oil-price.json ──>
 - 上游接口挂掉时脚本**保留已有数据**并以 0 退出，不会让构建失败；价格接口挂了但预测接口还活着时，只刷新预测
 - 抓取脚本带节流：`public/oil-price.json` 里的 `fetchedAt` 距今不足 `OIL_PRICE_MIN_REFRESH_MINUTES`（默认 80 分钟）就跳过，重复 push 不会白耗上游额度
 - 两次刷新都会先 `curl` 站点上正在用的那份数据当基准，接口额度有限，别浪费
+- **定时刷新任务用 `OIL_PRICE_STRICT=1`**：抓不到上游就以退出码 1 失败、任务变红，而不是悄悄沿用旧数据。构建流程不带这个变量（构建不该因为上游抖动而失败）
+
+### 定时刷新曾经静默失效（2026-11-03 修复）
+
+11 月 1～3 日的定时任务**连续三次显示绿色，但线上数据一直停在 10/31**（官方累计 90 元/吨，实际已变成 160）。原因是 `appleboy/scp-action` 会保留源目录层级：
+
+```
+source: "public/oil-price.json" + target: "~/blog"
+  → 文件落到 ~/blog/public/oil-price.json
+  → 复制步骤去找 ~/blog/oil-price.json，找不到 → docker compose cp 失败
+  → 但那一步只 echo 不 exit 1，且带 continue-on-error → 整条链路全绿
+```
+
+修复了三处：
+
+1. scp 步骤加 `strip_components: 1`，文件直接落到 `~/blog/oil-price.json`
+2. 复制步骤去掉 `continue-on-error`，失败时 `exit 1`；复制后还会比对容器内外文件的 `fetchedAt`，不一致就重试
+3. 抓取步骤加 `OIL_PRICE_STRICT=1`，上游不可用时任务变红
+
+> 教训：**「任务绿灯」不等于「数据更新了」**。凡是「静默兜底」的步骤，都要留一个能让它变红的开关，否则出问题只能靠人肉发现。
 
 ### 相关环境变量
 
@@ -133,6 +153,7 @@ scripts/fetch-oil-price.mjs ──抓上游──> public/oil-price.json ──>
 | `OIL_PRICE_PROVINCE` | 展示哪个省的油价（临时覆盖用） | 读 `src/lib/constants.ts` 的 `OIL_PRICE.province`，即「江苏」 |
 | `OIL_PRICE_MIN_REFRESH_MINUTES` | 最短刷新间隔（分钟），数据没这么旧就不重新抓 | `80` |
 | `OIL_PRICE_FORCE` | 设为 `1` 忽略上面的间隔，强制抓一次 | 无 |
+| `OIL_PRICE_STRICT` | 设为 `1` 时，抓不到上游就以退出码 1 失败（定时刷新任务用） | 无 |
 | `APIZERO_KEY` | apizero 的 API Key。**不配也能跑**（见下方说明），配了只是更稳 | 无 |
 | `APIHZ_ID` / `APIHZ_KEY` | 接口盒的公共 ID / KEY，主接口不可用时的备用价格源 | 无 |
 

@@ -30,26 +30,30 @@ jobs:
             echo "[oil-price] 已用站点上的数据作为基准"
           fi
 
+      # 抓不到上游就应当报错，而不是悄悄沿用旧数据——否则任务一直是绿的、数据却一直是旧的
       - name: Fetch oil price
         env:
           APIZERO_KEY: ${{ secrets.APIZERO_KEY }}
+          OIL_PRICE_STRICT: "1"
         run: node scripts/fetch-oil-price.mjs
 
+      # 注意：scp-action 默认保留源目录层级，不加 strip_components 的话
+      # public/oil-price.json 会落到 ~/blog/public/oil-price.json，
+      # 后面复制那一步就会找不到文件（曾经因此连续三天静默失败）
       - name: Upload oil price data
         uses: appleboy/scp-action@v1
-        continue-on-error: true
         with:
           host: ${{ secrets.SSH_HOST }}
           username: ${{ secrets.SSH_USER }}
           key: ${{ secrets.SSH_PRIVATE_KEY }}
           port: ${{ secrets.SSH_PORT }}
           source: "public/oil-price.json"
+          strip_components: 1
           target: "~/blog"
 
       # 直接把新文件放进正在跑的容器，不用重建镜像、不用重启站点
       - name: Copy into running container
         uses: appleboy/ssh-action@v1
-        continue-on-error: true
         env:
           DOMAIN: ${{ secrets.DOMAIN }}
         with:
@@ -64,11 +68,31 @@ jobs:
             cd ~/blog
             # compose 里 caddy 服务用了 DOMAIN=${DOMAIN:?...}，.env 缺失会让所有 compose 命令直接失败
             echo "DOMAIN=$DOMAIN" > .env
+
+            # 两个位置都找一下，兼容历史遗留的目录层级
+            SRC=""
+            for c in oil-price.json public/oil-price.json; do
+              if [ -f "$c" ]; then SRC="$c"; break; fi
+            done
+            if [ -z "$SRC" ]; then
+              echo "错误：服务器 ~/blog 下找不到 oil-price.json（scp 可能没送达）"
+              exit 1
+            fi
+            echo "[oil-price] 使用 $SRC"
+
+            WANT=$(grep -o '"fetchedAt": *[0-9]*' "$SRC" | grep -o '[0-9]*')
             for i in 1 2 3; do
-              if docker compose cp oil-price.json web:/usr/share/nginx/html/oil-price.json; then
-                echo "[oil-price] 容器内的数据文件已更新"
-                exit 0
+              if docker compose cp "$SRC" web:/usr/share/nginx/html/oil-price.json; then
+                GOT=$(docker compose exec -T web sh -c "grep -o '\"fetchedAt\": *[0-9]*' /usr/share/nginx/html/oil-price.json" < /dev/null | grep -o '[0-9]*')
+                if [ "$WANT" = "$GOT" ]; then
+                  echo "[oil-price] 容器内的数据文件已更新（fetchedAt=$GOT）"
+                  exit 0
+                fi
+                echo "[oil-price] 容器内 fetchedAt=$GOT 与期望 $WOT 不一致，重试"
+              else
+                echo "[oil-price] 复制失败（第 $i 次），重试"
               fi
               sleep 10
             done
-            echo "[oil-price] 更新容器内数据文件失败（站点可能正在部署，下一轮会重试）"
+            echo "错误：容器内的数据文件更新失败"
+            exit 1
