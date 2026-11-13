@@ -4,6 +4,9 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 RUN corepack enable pnpm && pnpm install --frozen-lockfile
 COPY . .
+# 这里只做静态构建，不抓油价：抓取走 scripts/fetch-oil-price.mjs，
+# 由 refresh-oil-price.yml 定时执行并热替换进运行中的容器，
+# 构建时不需要（也不应该）消耗上游接口额度。
 RUN pnpm run build
 
 # 阶段二：用 Nginx 服务静态文件

@@ -16,21 +16,31 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 以站点上正在用的那份数据为基准，避免重复消耗上游额度
+      # 构建时直接采用站点上正在用的那份数据，push 不再调上游接口。
+      #
+      # 上游额度按天计（匿名每个接口 5 次/天），而 push 是高频动作，
+      # 每次 push 都去抓会很快撞上限。数据本身由 refresh-oil-price.yml
+      # 每天 3 次刷新并热替换进运行中的容器，这里拿到的就已经是最新的一份。
+      #
+      # 只在它比仓库里的那份更新时才采用 —— 线上那份可能还是调价前的旧快照，
+      # 无条件覆盖会把已经刷新的新价格又打回旧值。
       - name: Use live data as baseline
         run: |
           curl -sS --max-time 15 "https://${{ secrets.DOMAIN }}/oil-price.json" -o oil-price-current.json || true
           if [ -f oil-price-current.json ] && node -e "JSON.parse(require('fs').readFileSync('oil-price-current.json','utf8'))" 2>/dev/null; then
-            cp oil-price-current.json public/oil-price.json
-            echo "[oil-price] 已用站点上的数据作为基准"
+            node -e "
+              const fs = require('fs');
+              const live = JSON.parse(fs.readFileSync('oil-price-current.json', 'utf8'));
+              const local = JSON.parse(fs.readFileSync('public/oil-price.json', 'utf8'));
+              if ((live.fetchedAt || 0) > (local.fetchedAt || 0)) {
+                fs.writeFileSync('public/oil-price.json', JSON.stringify(live, null, 2));
+                console.log('[oil-price] 已用站点上的数据作为基准');
+              } else {
+                console.log('[oil-price] 仓库里的数据更新，保留本地版本');
+              }
+            "
           fi
           rm -f oil-price-current.json
-
-      # 抓一次今日油价写进 public/oil-price.json（接口不可用时保留仓库里的旧数据）
-      - name: Fetch oil price
-        env:
-          APIZERO_KEY: ${{ secrets.APIZERO_KEY }}
-        run: node scripts/fetch-oil-price.mjs
 
       - name: Setup pnpm
         uses: pnpm/action-setup@v4

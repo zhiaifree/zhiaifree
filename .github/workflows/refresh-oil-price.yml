@@ -4,10 +4,13 @@ name: Refresh oil price
 # 只更新 public/oil-price.json 并塞进正在跑的容器，
 # 不重建镜像、不重启站点、没有停机。
 on:
-  # 每天 00:07（北京时间）跑一次。GitHub Actions 的 cron 用 UTC，
-  # 16 点 UTC = 次日 0 点北京，正好赶在每日额度重置之后
+  # 每天多跑几次。调价通常在 24 时生效，上游价格接口的缓存切换有延迟，
+  # 只在 00:07 跑一次的话，调价当天很可能一整天都拿不到新价格。
+  # 16 点 UTC = 次日 0 点北京（每日额度重置后），其余几次覆盖白天时段。
   schedule:
     - cron: "7 16 * * *"
+    - cron: "7 4 * * *"
+    - cron: "7 12 * * *"
   workflow_dispatch:
 
 jobs:
@@ -21,13 +24,24 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      # 以站点上正在用的那份数据为基准，避免重复消耗上游额度
+      # 以站点上正在用的那份数据为基准，避免重复消耗上游额度。
+      # 只在它比仓库里的那份更新时才采用 —— 线上那份可能还是调价前的旧快照，
+      # 无条件覆盖会把已经刷新的新价格又打回旧值。
       - name: Use live data as baseline
         run: |
           curl -sS --max-time 15 "https://${{ secrets.DOMAIN }}/oil-price.json" -o oil-price-current.json || true
           if [ -f oil-price-current.json ] && node -e "JSON.parse(require('fs').readFileSync('oil-price-current.json','utf8'))" 2>/dev/null; then
-            cp oil-price-current.json public/oil-price.json
-            echo "[oil-price] 已用站点上的数据作为基准"
+            node -e "
+              const fs = require('fs');
+              const live = JSON.parse(fs.readFileSync('oil-price-current.json', 'utf8'));
+              const local = JSON.parse(fs.readFileSync('public/oil-price.json', 'utf8'));
+              if ((live.fetchedAt || 0) > (local.fetchedAt || 0)) {
+                fs.writeFileSync('public/oil-price.json', JSON.stringify(live, null, 2));
+                console.log('[oil-price] 已用站点上的数据作为基准');
+              } else {
+                console.log('[oil-price] 仓库里的数据更新，保留本地版本');
+              }
+            "
           fi
           rm -f oil-price-current.json
 
@@ -36,6 +50,10 @@ jobs:
         env:
           APIZERO_KEY: ${{ secrets.APIZERO_KEY }}
           OIL_PRICE_STRICT: "1"
+          # 调价生效后的一段时间内，上游缓存还没切到新价格，需要更频繁地重试。
+          # 平时用 360 分钟节流省额度，调价窗口期内收紧到 60 分钟。
+          OIL_PRICE_MIN_REFRESH_MINUTES: ${{ vars.OIL_PRICE_MIN_REFRESH_MINUTES || '360' }}
+          OIL_PRICE_ADJUST_WAIT_MINUTES: ${{ vars.OIL_PRICE_ADJUST_WAIT_MINUTES || '60' }}
         run: node scripts/fetch-oil-price.mjs
 
       # 注意：scp-action 默认保留源目录层级，不加 strip_components 的话

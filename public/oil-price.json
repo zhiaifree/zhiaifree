@@ -1,66 +1,66 @@
 {
   "province": "江苏",
-  "fetchedAt": 1793664559176,
+  "fetchedAt": 1794579415248,
   "price": {
     "province": "江苏",
-    "update_date": "2026-11-03",
+    "update_date": null,
     "prices": [
       {
         "name": "92号汽油",
         "type": "gasoline_92",
-        "price": 8.85,
+        "price": 8.34,
         "unit": "元/升"
       },
       {
         "name": "95号汽油",
         "type": "gasoline_95",
-        "price": 9.41,
+        "price": 8.87,
         "unit": "元/升"
       },
       {
         "name": "98号汽油",
         "type": "gasoline_98",
-        "price": 11.48,
+        "price": 10.94,
         "unit": "元/升"
       },
       {
         "name": "0号柴油",
         "type": "diesel_0",
-        "price": 8.55,
+        "price": 8.01,
         "unit": "元/升"
       },
       {
         "name": "-10号柴油",
         "type": "diesel_10",
-        "price": 9.06,
+        "price": 8.49,
         "unit": "元/升"
       }
     ],
-    "next_adjustment": "下次油价11月12日24时调整",
-    "forecast": "变化率3.11%，预计上调油价160元/吨",
-    "change_rate": 3.11,
-    "change_rate_as_of": "2026-11-02",
-    "working_day": 2,
-    "crude_avg_usd": 109.66,
-    "estimated_change_per_ton": 160
+    "next_adjustment": "下次油价11月26日24时调整",
+    "forecast": "变化率-4.69%，预计下调油价300元/吨",
+    "change_rate": -4.69,
+    "change_rate_as_of": "2026-11-13",
+    "working_day": 1,
+    "crude_avg_usd": 92.28,
+    "estimated_change_per_ton": -300
   },
   "forecast": {
     "crude_oil": {
-      "wti": 96.427,
-      "brent": 104.226,
-      "wti_change": -0.033,
-      "brent_change": -9.204,
+      "wti": 89.088,
+      "brent": 96.64,
+      "wti_change": 0.348,
+      "brent_change": 0.82,
       "source": "sina_finance"
     },
-    "next_adjust_date": "2026-11-12",
-    "days_remaining": 9,
+    "next_adjust_date": "2026-11-26",
+    "days_remaining": 13,
     "prediction": {
-      "direction": "下跌",
-      "direction_emoji": "📉",
-      "estimated_change_per_ton": -2216,
-      "estimated_change_per_liter": 1.641,
+      "direction": "上涨",
+      "direction_emoji": "📈",
+      "estimated_change_per_ton": 423,
+      "estimated_change_per_liter": 0.313,
       "confidence": "低",
-      "analysis": "当前国际油价布伦特约 104.2 美元/桶，近期呈下跌趋势（日均 -4.62 美元）。距调价窗口还有 9 天，当前累计变化约 -2216 元/吨，若趋势延续，预计本轮油价将下调。"
+      "analysis": "当前国际油价布伦特约 96.6 美元/桶，近期呈上涨趋势（日均 +0.58 美元）。距调价窗口还有 13 天，当前累计变化约 +423 元/吨，若趋势延续，预计本轮油价将上调。"
     }
   }
 }

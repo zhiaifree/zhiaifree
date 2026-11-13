@@ -58,6 +58,18 @@ const APIHZ_API = "https://cn.apihz.cn/api/jinrong/youjia.php";
 
 const TIMEOUT = 8000;
 
+/**
+ * 调价发生后的「等上游缓存刷新」窗口。
+ * 调价通常在 24 时生效，上游价格接口的缓存切换有延迟，
+ * 这段时间内需要缩短刷新间隔，才能尽快拿到调价后的新价格。
+ */
+const ADJUST_WAIT_WINDOW_MS = 48 * 60 * 60 * 1000;
+
+/** 处于等上游刷新的窗口内时，用更短的刷新间隔 */
+const ADJUST_WAIT_REFRESH_MINUTES = Number(
+  process.env.OIL_PRICE_ADJUST_WAIT_MINUTES || 60,
+);
+
 async function getJson(url, init = {}) {
   const controller = new AbortController();
   const timer = setTimeout(() => controller.abort(), TIMEOUT);
@@ -138,15 +150,82 @@ function readExisting() {
   }
 }
 
+/**
+ * 从「下次油价11月26日24时调整」这类文案里解析出调价时刻（当天 24 时，即次日 0 点）。
+ * 调价发生后，新价格必须到下一个调价日才生效，所以这个时刻是判断
+ * 「当前油价」是否已经切换到新一轮的关键。
+ */
+function parseAdjustmentMoment(text) {
+  const matched = /(\d{1,2})月(\d{1,2})日/.exec(text ?? "");
+  if (!matched) return null;
+  const month = Number(matched[1]);
+  const day = Number(matched[2]);
+  // 「11月26日24时」= 11 月 27 日 0 点，按本地时区构造
+  const moment = new Date(new Date().getFullYear(), month - 1, day, 0, 0, 0, 0);
+  moment.setDate(moment.getDate() + 1);
+  return moment;
+}
+
+/**
+ * 判断上游返回的「当前油价」是不是调价前的旧快照。
+ *
+ * 上游价格接口带缓存层：调价生效后的一段时间内，它仍会返回上一轮的旧价格，
+ * 但 next_adjustment 文案已经指向下一个调价日、预测接口也已经按新一轮计算。
+ * 此时如果照单全收，页面就会一直显示调价前的价格。
+ *
+ * 判定依据：next_adjustment 指向的时刻已经过去（说明这份价格数据跨过了调价点，
+ * 却还是旧价），或者它与预测接口给出的下一轮调价日不一致。
+ */
+function isStaleSnapshot(price, forecast, now = new Date()) {
+  if (!price) return false;
+
+  const moment = parseAdjustmentMoment(price.next_adjustment);
+  if (moment && moment.getTime() <= now.getTime()) {
+    return true; // 调价时刻已过，价格却还是调价前的
+  }
+
+  // 预测接口给出的下一轮调价日，比价格接口自报的更晚 → 价格接口落后了一轮
+  const nextFromForecast = forecast?.next_adjust_date;
+  if (moment && nextFromForecast) {
+    const forecastMoment = new Date(`${nextFromForecast}T00:00:00`);
+    if (!Number.isNaN(forecastMoment.getTime()) && forecastMoment.getTime() > moment.getTime()) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
+/**
+ * 调价发生后的一段时间内，上游缓存可能还没切换过来。
+ * 这段时间里要更频繁地重试，否则「当前油价」会停留在上一轮。
+ */
+function isAdjustWindowOpen(price, now = new Date()) {
+  if (!price) return false;
+  const moment = parseAdjustmentMoment(price.next_adjustment);
+  if (!moment) return false;
+  // 调价时刻已过，但新一轮价格还没生效 → 处于「等上游刷新」的窗口
+  const elapsed = now.getTime() - moment.getTime();
+  return elapsed > 0 && elapsed < ADJUST_WAIT_WINDOW_MS;
+}
+
 const existing = readExisting();
 
 // 上游是「每个接口每天 20 次」，抓太勤会直接 429，所以先看看手上的数据够不够新
 const ageMinutes = existing?.fetchedAt
   ? (Date.now() - existing.fetchedAt) / 60000
   : Infinity;
-if (!FORCE && ageMinutes < MIN_REFRESH_MINUTES) {
+
+// 调价刚发生、上游缓存还没切过来时，用更短的间隔重试，
+// 否则「当前油价」会整轮停留在调价前的价格上
+const waitingForNewPrice = isAdjustWindowOpen(existing?.price);
+const refreshMinutes = waitingForNewPrice
+  ? Math.min(MIN_REFRESH_MINUTES, ADJUST_WAIT_REFRESH_MINUTES)
+  : MIN_REFRESH_MINUTES;
+
+if (!FORCE && ageMinutes < refreshMinutes) {
   console.log(
-    `[oil-price] 数据是 ${Math.round(ageMinutes)} 分钟前抓的（阈值 ${MIN_REFRESH_MINUTES} 分钟），本次跳过`,
+    `[oil-price] 数据是 ${Math.round(ageMinutes)} 分钟前抓的（阈值 ${refreshMinutes} 分钟），本次跳过`,
   );
   process.exit(0);
 }
@@ -177,6 +256,35 @@ if (!finalPrice) {
     console.error("[oil-price] 严格模式：上游接口不可用，本次刷新判定为失败");
     process.exit(1);
   }
+  process.exit(0);
+}
+
+// 上游价格接口有缓存层：调价后它可能仍返回调价前的旧价格。
+// 这种数据不能当作「当前油价」写进去，否则页面会一直显示上一轮的价格。
+const stale = isStaleSnapshot(finalPrice, forecast);
+
+if (stale) {
+  console.warn(
+    "[oil-price] 上游返回的仍是调价前的旧价格（缓存尚未刷新），本次不覆盖已有的当前油价",
+  );
+
+  // 已有数据同样陈旧时也没有更新的价值，保留原样并按失败处理
+  if (!existing?.price || isStaleSnapshot(existing.price, existing.forecast)) {
+    if (STRICT) {
+      console.error(
+        "[oil-price] 严格模式：上游价格快照已陈旧且本地无有效数据，本次刷新判定为失败",
+      );
+      process.exit(1);
+    }
+    console.warn("[oil-price] 本地也没有更新一轮的价格，保持现有数据不变");
+    process.exit(0);
+  }
+
+  // 本地有有效价格：只刷新预测部分，当前油价保持不动
+  existing.forecast = forecast;
+  existing.fetchedAt = Date.now();
+  writeFileSync(OUT_FILE, JSON.stringify(existing, null, 2), "utf8");
+  console.log("[oil-price] 保留已有的当前油价，只更新了调价预测");
   process.exit(0);
 }
 

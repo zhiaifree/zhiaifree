@@ -26,7 +26,8 @@ const LITERS_PER_TON: Record<OilGrade, number> = {
 
 export interface RawPricePayload {
   province: string;
-  update_date: string;
+  /** 上游有时返回 null（缓存快照里没有这个字段），此时用抓取时间兜底 */
+  update_date: string | null;
   prices: { name: string; type: string; price: number; unit: string }[];
   next_adjustment: string;
   forecast: string;
@@ -85,6 +86,12 @@ export interface OilSnapshot {
   grades: OilGradePrice[];
   /** 数据抓取时间戳 */
   fetchedAt: number;
+  /**
+   * 当前价格是否还停留在调价前。
+   * 上游价格接口有缓存层，调价生效后的一段时间内仍返回上一轮的旧价格；
+   * 这时「当前油价」不能当作新价展示，涨跌推算也要一并停用。
+   */
+  stale: boolean;
 }
 
 const round2 = (value: number) => Math.round(value * 100) / 100;
@@ -99,6 +106,53 @@ function parseAdjustDate(text: string): string {
   return `${year}-${month}-${day}`;
 }
 
+/**
+ * 解析「下次油价11月26日24时调整」里的调价时刻。
+ * 「24时」= 当天结束，也就是次日 0 点。
+ */
+function parseAdjustMoment(text: string): Date | null {
+  const matched = /(\d{1,2})月(\d{1,2})日/.exec(text ?? "");
+  if (!matched) return null;
+  const year = new Date().getFullYear();
+  const moment = new Date(year, Number(matched[1]) - 1, Number(matched[2]));
+  moment.setDate(moment.getDate() + 1);
+  return moment;
+}
+
+/**
+ * 判断上游给的「当前油价」是不是调价前的旧快照。
+ *
+ * 上游价格接口带缓存层：调价生效后的一段时间内，它仍会返回上一轮的旧价格，
+ * 但 next_adjustment 文案已经指向下一个调价日。此时如果照单全收，
+ * 页面就会一直显示调价前的价格 —— 正是线上出现过的现象。
+ *
+ * 判定依据：next_adjustment 指向的时刻已经过去（调价点已跨过，价格却还是旧的），
+ * 或者它比预测接口给出的下一轮调价日更早（价格接口落后了一轮）。
+ */
+export function isStalePrice(
+  price: RawPricePayload | null,
+  forecast: RawForecastPayload | null,
+  now: Date = new Date(),
+): boolean {
+  if (!price) return false;
+
+  const moment = parseAdjustMoment(price.next_adjustment);
+  if (moment && moment.getTime() <= now.getTime()) return true;
+
+  const nextFromForecast = forecast?.next_adjust_date;
+  if (moment && nextFromForecast) {
+    const forecastMoment = new Date(`${nextFromForecast}T00:00:00`);
+    if (
+      !Number.isNaN(forecastMoment.getTime()) &&
+      forecastMoment.getTime() > moment.getTime()
+    ) {
+      return true;
+    }
+  }
+
+  return false;
+}
+
 function daysUntil(iso: string): number {
   if (!iso) return 0;
   const target = new Date(`${iso}T00:00:00`);
@@ -106,6 +160,14 @@ function daysUntil(iso: string): number {
   const today = new Date();
   today.setHours(0, 0, 0, 0);
   return Math.round((target.getTime() - today.getTime()) / 86400000);
+}
+
+/** 兜底用抓取时间当「更新日期」，格式与上游的 YYYY-MM-DD 保持一致 */
+function formatIsoDate(date: Date): string {
+  const year = date.getFullYear();
+  const month = String(date.getMonth() + 1).padStart(2, "0");
+  const day = String(date.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
 }
 
 /** 把上游原始数据整理成卡片需要的结构 */
@@ -117,6 +179,9 @@ export function normalizeOilData(
 
   const priceData = raw.price;
   const prediction = raw.forecast?.prediction;
+
+  // 上游缓存里可能还留着调价前的价格，这时不能把它当作「当前油价」
+  const stale = isStalePrice(priceData, raw.forecast);
 
   // 两个来源，优先用官方口径：
   // 1) 价格接口里的 estimated_change_per_ton —— 本轮计价周期「截至当前」的累计变化
@@ -155,8 +220,9 @@ export function normalizeOilData(
     const item = priceData.prices?.find((p) => p.type === `gasoline_${grade}`);
     const price = item ? Number(item.price) : NaN;
     const hasPrice = !Number.isNaN(price);
+    // 价格还停在调价前时，用它推算「调价后价格」没有意义
     const change =
-      changePerTon === null || !hasPrice
+      stale || changePerTon === null || !hasPrice
         ? null
         : changePerTon / LITERS_PER_TON[grade];
 
@@ -177,7 +243,10 @@ export function normalizeOilData(
 
   return {
     province: priceData.province || raw.province || fallbackProvince,
-    updateDate: priceData.update_date ?? "",
+    // 上游缓存快照里这个字段可能是 null，兜底用抓取时间，至少能显示「哪天抓的」
+    updateDate:
+      priceData.update_date ||
+      formatIsoDate(new Date(raw.fetchedAt ?? Date.now())),
     // 兜底解析出来的日期如果已经过去，说明那条文案是旧的，就别显示了
     nextAdjustDate: daysUntil(nextAdjustDate) < 0 ? "" : nextAdjustDate,
     daysRemaining,
@@ -185,6 +254,7 @@ export function normalizeOilData(
     changePerTon,
     grades,
     fetchedAt: raw.fetchedAt ?? Date.now(),
+    stale,
   };
 }
 

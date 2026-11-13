@@ -45,16 +45,21 @@ const rows = OIL_GRADES.map((grade) => {
   }
 })
 
+// 价格还停留在调价前时，明确告诉用户「正在等新价」，而不是把旧价当作当前价
 const subtitle = snapshot
-  ? `${snapshot.province} · ${snapshot.updateDate.slice(5)} 更新`
+  ? snapshot.stale
+    ? `${snapshot.province} · 调价后新价待更新`
+    : `${snapshot.province} · ${snapshot.updateDate.slice(5)} 更新`
   : `${OIL_PRICE.province} · 数据待更新`
 
 const footer = snapshot
-  ? snapshot.nextAdjustDate
-    ? `下次调价 ${formatAdjustDate(snapshot.nextAdjustDate)}24时（${formatCountdown(
-        snapshot.daysRemaining,
-      )}）· 仅供参考`
-    : '调价时间待公布 · 仅供参考'
+  ? snapshot.stale
+    ? '上游价格尚未刷新，请以加油站实际标价为准'
+    : snapshot.nextAdjustDate
+      ? `下次调价 ${formatAdjustDate(snapshot.nextAdjustDate)}24时（${formatCountdown(
+          snapshot.daysRemaining,
+        )}）· 仅供参考`
+      : '调价时间待公布 · 仅供参考'
   : '油价数据待更新'
 ---
 
@@ -125,6 +130,7 @@ const footer = snapshot
     updateDate: string
     nextAdjustDate: string
     daysRemaining: number
+    stale: boolean
     grades: {
       grade: string
       price: number
@@ -154,20 +160,21 @@ const footer = snapshot
 
     const subtitleEl = document.querySelector<HTMLElement>('#oil-subtitle')
     if (subtitleEl) {
-      const updated =
-        snapshot.updateDate.length >= 10
-          ? snapshot.updateDate.slice(5)
-          : snapshot.updateDate
-      subtitleEl.textContent = `${snapshot.province} · ${updated} 更新`
+      // 价格还在调价前时，提示用户新价待更新，不要把旧价当成当前价
+      subtitleEl.textContent = snapshot.stale
+        ? `${snapshot.province} · 调价后新价待更新`
+        : `${snapshot.province} · ${snapshot.updateDate.slice(5)} 更新`
     }
 
     const footerEl = document.querySelector<HTMLElement>('#oil-footer')
     if (footerEl) {
-      footerEl.textContent = snapshot.nextAdjustDate
-        ? `下次调价 ${formatAdjustDate(snapshot.nextAdjustDate)}24时（${formatCountdown(
-            snapshot.daysRemaining,
-          )}）· 仅供参考`
-        : '调价时间待公布 · 仅供参考'
+      footerEl.textContent = snapshot.stale
+        ? '上游价格尚未刷新，请以加油站实际标价为准'
+        : snapshot.nextAdjustDate
+          ? `下次调价 ${formatAdjustDate(snapshot.nextAdjustDate)}24时（${formatCountdown(
+              snapshot.daysRemaining,
+            )}）· 仅供参考`
+          : '调价时间待公布 · 仅供参考'
     }
   }
 
